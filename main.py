@@ -22,22 +22,20 @@ args.add_argument("--config", type=str, default="")
 # Data loading and saving parameters
 args.add_argument("--train_dir", type=str, default="data/train.txt")
 args.add_argument("--val_dir", type=str, default="data/test.txt")
-args.add_argument("--pretrained_embed_dir", type=str, default="/home/angrypark/data/fasttext/fasttext.200M.256D.npy")
-args.add_argument("--vocab_list_dir", type=str, default="/home/angrypark/data/fasttext/vocab_list_syllable.txt")
+args.add_argument("--pretrained_embed_dir", type=str, default="/home/shuuki4/sandbox_project/fasttext/results/ft_256.bin")
 
 # Model specification
 args.add_argument("--model", type=str, default="DualEncoderLSTM")
 args.add_argument("--normalizer", type=str, default="BaseNormalizer")
 args.add_argument("--tokenizer", type=str, default="BaseTokenizer")
-args.add_argument("--vocab_size", type=int, default=20000)
+args.add_argument("--vocab_size", type=int, default=200000)
 
 # Model hyperparameters
-args.add_argument("--num_classes", type=int, default=2)
 args.add_argument("--embed_dim", type=int, default=256)
 args.add_argument("--learning_rate", type=float, default=1e-1)
 args.add_argument("--min_length", type=int, default=1)
 args.add_argument("--max_length", type=int, default=20)
-args.add_argument("--lstm-dim", type=int, default=512)
+args.add_argument("--lstm_dim", type=int, default=512)
 
 # Training parameters
 args.add_argument("--batch_size", type=int, default=256)
@@ -48,9 +46,7 @@ args.add_argument("--max_to_keep", type=int, default=10)
 args.add_argument("--shuffle", type=bool, default=True)
 
 # Misc parameters
-args.add_argument("--allow_soft_replacement", type=bool, default=True)
-args.add_argument("--log_device_placement", type=bool, default=False)
-args.add_argument("--gpu", type=str, default="all")
+args.add_argument("--gpu", type=str, default="a")
 
 config = args.parse_args()
 config_str = " | ".join(["{}={}".format(attr.upper(), value) for attr, value in config.__dict__.items()])

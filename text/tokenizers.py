@@ -27,6 +27,12 @@ class BaseTokenizer(ABC):
     def tokenize(self, sentence):
         tokenized_sentence = sentence.split(" ")
         return tokenized_sentence
+    
+
+class DummyTokenizer(BaseTokenizer):
+    def tokenize(self, sentence):
+        tokenized_sentence = sentence.split(" ")
+        return tokenized_sentence
 
 
 class JamoTokenizer(BaseTokenizer):
