@@ -3,27 +3,36 @@ import numpy as np
 class DataGenerator:
     def __init__(self, preprocessor, config):
         self.config = config
-        train_set, val_set = load_data(config.train_dir, config.val_dir, small=(config.mode=="small"))
+        train_set, val_set = load_data(config.train_dir, config.val_dir, small=(config.mode=="debug"))
         self.train_size = len(train_set)
         if config.shuffle:
             np.random.shuffle(train_set)
             
         # split data into lines and lables
-        train_queries, train_replies = split_data(train_set)
-        val_queries, val_replies = split_data(val_set)
+        train_queries, train_replies, train_labels = split_data(train_set)
+        val_queries, val_replies, val_labels = split_data(val_set)
         
         # build preprocessor
         self.preprocessor = preprocessor
-        self.preprocessor.build_preprocessor(train_lines)
+        self.preprocessor.build_preprocessor(train_queries + train_replies)
 
         # preprocess line and make it to a list of word indices
-        train_data = np.array([self.preprocessor.preprocess(sentence) for sentence in train_lines])
-        val_data = np.array([self.preprocessor.preprocess(sentence) for sentence in val_lines])
+        train_queries, train_queries_lengths = zip(*[self.preprocessor.preprocess(query) for query in train_queries])
+        train_replies, train_replies_lengths = zip(*[self.preprocessor.preprocess(reply) for reply in train_replies])
+        
+        val_queries, val_queries_lengths = zip(*[self.preprocessor.preprocess(query) for query in val_queries])
+        val_replies, val_replies_lengths = zip(*[self.preprocessor.preprocess(reply) for reply in val_replies])
+        
+        train_queries, train_replies = np.array(train_queries), np.array(train_replies)
+        val_queries, val_replies = np.array(val_queries), np.array(val_replies)
         
         # merge train data and val data
         data = dict()
-        data['train_data'], data['train_labels'] = train_data, train_labels
-        data['val_data'], data['val_labels'] = val_data, val_labels
+        data['train_queries'], data['train_replies'], data['train_labels'] = train_queries, train_replies, train_labels
+        data['train_queries_lengths'], data['train_replies_lengths'] = train_queries_lengths, train_replies_lengths
+        
+        data['val_queries'], data['val_replies'], data['val_labels'] = val_queries, val_replies, val_labels
+        data['val_queries_lengths'], data['val_replies_lengths'] = val_queries_lengths, val_replies_lengths
         self.data = data
 
     def next_batch(self, batch_size):
@@ -32,10 +41,12 @@ class DataGenerator:
             for batch_num in range(num_batches_per_epoch):
                 start_idx = batch_num*batch_size
                 end_idx = min((batch_num+1)*batch_size, self.train_size)
-                yield self.data['train_data'][start_idx:end_idx], self.data['train_labels'][start_idx:end_idx]
+                yield self.data['train_queries'][start_idx:end_idx], self.data['train_replies'][start_idx:end_idx], \
+                self.data['train_labels'][start_idx:end_idx], self.data['train_queries_lengths'][start_idx:end_idx], \
+                self.data['train_replies_lengths'][start_idx:end_idx]
 
     def load_val_data(self):
-        return self.data['val_data'], self.data['val_labels']
+        return self.data['val_queries'], self.data['val_replies'], self.data['val_labels'], self.data['val_queries_lengths'], self.data['val_replies_lengths']
 
 
 def load_data(train_dir, val_dir, small=False):
@@ -50,5 +61,5 @@ def load_data(train_dir, val_dir, small=False):
     return train_data, val_data
 
 def split_data(data):
-    queries, replies = zip(*[line.split('\t') for line in data])
-    return queries, replies
+    queries, replies, labels = zip(*[line.split('\t') for line in data])
+    return queries, replies, labels
