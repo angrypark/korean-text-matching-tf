@@ -1,6 +1,7 @@
 from jamo import h2j, j2hcj
 import re
 from konlpy.tag import Twitter
+import sentencepiece as spm
 from soynlp.tokenizer import MaxScoreTokenizer
 from soynlp.word import WordExtractor
 from collections import Counter
@@ -75,28 +76,24 @@ class SoyNLPTokenizer(BaseTokenizer):
     """
     Tokenize text using MaxScoreTokenizer of SoyNLP
     """
-    def __init__(self):
-        self.tokenizer = None
-        self.scores = list()
-        self.word_extractor = WordExtractor(min_count=100,
-                                            min_cohesion_forward=0.05,
-                                            min_right_branching_entropy=0.0)
-
-    def fit(self, sentences):
-        self.word_extractor.train(sentences)
-        scores = self.word_extractor.extract()
-        scores = [(word, (score.cohesion_forward + score.cohesion_backward) * \
-                   (score.left_branching_entropy + score.right_branching_entropy)) for word, score in scores.items()]
-        self.scores = scores
-        self.tokenizer = MaxScoreTokenizer(scores=self.scores)
-
-    def state_dict(self):
-        return {'scores': self.scores}
-
-    def load_state_dict(self, state_dict):
-        self.scores = state_dict['scores']
-        self.tokenizer = MaxScoreTokenizer(scores=self.scores)
-
+    def __init__(self, config):
+        with open(config.soynlp_scores, "r") as f:
+            scores = [line.strip().split("\t") for line in f]
+            scores = [(word, float(score)) for word, score in scores]
+        self.tokenizer = MaxScoreTokenizer(scores=scores)
+    
     def tokenize(self, sentence):
         tokenized_sentence = self.tokenizer.tokenize(sentence)
         return tokenized_sentence
+    
+
+class SentencePieceTokenizer(BaseTokenizer):
+    def __init__(self, config):
+        self.tokenizer = spm.SentencePieceProcessor()
+        self.tokenizer.Load(config.sentence_piece_model)
+    
+    def tokenize(self, sentence):
+        tokens = self.tokenizer.EncodeAsPieces(sentence)
+        tokens = [token.decode("utf-8").replace("▁","") for token in tokens]
+        tokens = [token for token in tokens if token]
+        return tokens
