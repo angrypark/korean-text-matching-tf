@@ -18,17 +18,14 @@ def get_embeddings(idx2word, config):
                 num_oov += 1
         print("Embedding loaded, number of OOV : {} / {}".format(num_oov, len(idx2word)))
     else:
-        print("No pre-trained embeddzzing found, initialize with random distribution")
+        print("No pre-trained embedding found, initialize with random distribution")
     return embedding
 
 
 class DualEncoderLSTM(BaseModel):
     def __init__(self, preprocessor, config):
-        super(DualEncoderLSTM, self).__init__(config)
-        self.config = config
-        self.preprocessor = preprocessor
+        super(DualEncoderLSTM, self).__init__(preprocessor, config)
         self.build_model()
-        self.init_saver()
 
     def build_model(self):
         # Placeholders for input, output
@@ -95,6 +92,3 @@ class DualEncoderLSTM(BaseModel):
             predictions = tf.cast(tf.argmax(self.logits, 1), tf.int32)
             correct_predictions = tf.equal(predictions, self.input_labels)
             self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
-
-    def init_saver(self):
-        self.saver = tf.train.Saver(max_to_keep=self.config.max_to_keep)

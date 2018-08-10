@@ -1,8 +1,11 @@
 import tensorflow as tf
 import os
 import json
+import logging
+from colorlog import ColoredFormatter
 
-class Logger:
+
+class SummaryWriter:
     def __init__(self, sess,config):
         self.sess = sess
         self.config = config
@@ -26,7 +29,7 @@ class Logger:
         :param summaries_dict: the dict of the summaries values (tag,value)
         :return:
         """
-        summary_writer = self.train_summary_writer if summarizer == "train" else self.test_summary_writer
+        writer = self.train_summary_writer if summarizer == "train" else self.test_summary_writer
         with tf.variable_scope(scope):
             if summaries_dict is not None:
                 summary_list = []
@@ -44,5 +47,28 @@ class Logger:
                     summary_list.append(self.sess.run(self.summary_ops[tag], {self.summary_placeholders[tag]: value}))
 
                 for summary in summary_list:
-                    summary_writer.add_summary(summary, step)
-                summary_writer.flush()
+                    writer.add_summary(summary, step)
+                writer.flush()
+
+
+def setup_logger():
+    """Return a logger with a default ColoredFormatter."""
+    formatter = ColoredFormatter(
+        "%(log_color)s[%(asctime)s][%(levelname)s] %(message)s %(reset)s",
+        datefmt="%H:%M:%S",
+        reset=True,
+        log_colors={
+            'DEBUG':    'cyan',
+            'INFO':     'green',
+            'WARNING':  'yellow',
+            'ERROR':    'red',
+            'CRITICAL': 'red',
+        }
+    )
+
+    logger = logging.getLogger('example')
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    return logger

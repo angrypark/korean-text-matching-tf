@@ -2,21 +2,21 @@ import tensorflow as tf
 
 
 class BaseModel:
-    def __init__(self, config):
+    def __init__(self, preprocessor, config):
+        self.preprocessor = preprocessor
         self.config = config
-        # init the global step
         self.init_global_step()
-        # init the epoch counter
         self.init_cur_epoch()
-        self.checkpoint_dir = "runs/{}/checkpoint/".format(self.config.name)
+        self.init_saver()
+
     # save function that saves the checkpoint in the path defined in the config file
-    def save(self, sess):
-        self.saver.save(sess, self.checkpoint_dir, self.global_step_tensor)
+    def save(self, sess, save_dir):
+        self.saver.save(sess, save_dir, self.global_step_tensor)
         print("Model saved")
 
     # load latest checkpoint from the experiment path defined in the config file
     def load(self, sess):
-        latest_checkpoint = tf.train.latest_checkpoint(self.checkpoint_dir)
+        latest_checkpoint = tf.train.latest_checkpoint(self.config.checkpoint_dir)
         if latest_checkpoint:
             print("Loading model checkpoint {}_{} ...\n".format(self.config.name, latest_checkpoint))
             self.saver.restore(sess, latest_checkpoint)
@@ -33,11 +33,10 @@ class BaseModel:
         # DON'T forget to add the global step tensor to the tensorflow trainer
         with tf.variable_scope('global_step'):
             self.global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
+            self.increment_global_step_tensor = tf.assign(self.global_step_tensor, self.global_step_tensor + 1)
 
     def init_saver(self):
-        # just copy the following line in your child class
-        # self.saver = tf.train.Saver(max_to_keep=self.config.max_to_keep)
-        raise NotImplementedError
+        self.saver = tf.train.Saver(max_to_keep=self.config.max_to_keep)
 
     def build_model(self):
         raise NotImplementedError

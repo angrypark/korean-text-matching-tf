@@ -79,7 +79,7 @@ class SoyNLPTokenizer(BaseTokenizer):
     def __init__(self, config):
         with open(config.soynlp_scores, "r") as f:
             scores = [line.strip().split("\t") for line in f]
-            scores = [(word, float(score)) for word, score in scores]
+            scores = {word:float(score) for word, score in scores}
         self.tokenizer = MaxScoreTokenizer(scores=scores)
     
     def tokenize(self, sentence):

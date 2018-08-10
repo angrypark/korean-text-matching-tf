@@ -1,26 +1,14 @@
-import json
-from bunch import Bunch
 import os
+import json
+import tensorflow as tf
 
+def load_config(path):
+    with open(os.path.join(path, "config.json"), "r", encoding="utf-8") as f:
+        config_dict = json.loads(json.loads(f.readline()))
 
-def get_config_from_json(json_file):
-    """
-    Get the config from a json file
-    :param json_file:
-    :return: config(namespace) or config(dictionary)
-    """
-    # parse the configurations from the config json file provided
-    with open(json_file, 'r') as config_file:
-        config_dict = json.load(config_file)
-
-    # convert the dictionary to a namespace using bunch lib
-    config = Bunch(config_dict)
-
-    return config, config_dict
-
-
-def process_config(json_file):
-    config, _ = get_config_from_json(json_file)
-    config.summary_dir = os.path.join("../experiments", config.exp_name, "summary/")
-    config.checkpoint_dir = os.path.join("../experiments", config.exp_name, "checkpoint/")
+    config = tf.contrib.training.HParams(**config_dict)
     return config
+
+def save_config(path, config):
+    with open(os.path.join(path, "config.json"), "w", encoding="utf-8") as f:
+        json.dump(config.to_json(), f)
