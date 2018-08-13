@@ -72,7 +72,7 @@ class MatchingModelTrainer(BaseTrainer):
 
         # for summary and logger
         self.summary_dict = dict()
-        self.train_summary = "Epoch : {:2d} | Train loss : {:.4f} | Train accuracy : {:.4f} "
+        self.train_summary = "Epoch : {:2d} | Step : {:8d} | Train loss : {:.4f} | Train accuracy : {:.4f} "
         self.val_summary = "| Val loss : {:.4f} | Val accuracy : {:.4f} "
 
 
@@ -90,19 +90,12 @@ class MatchingModelTrainer(BaseTrainer):
         train_loss = np.mean(losses)
         train_score = np.mean(scores)
 
-        cur_it = self.model.global_step_tensor.eval(self.sess)
-        summaries_dict = {
-            'train_loss': train_loss,
-            'train_accuracy': train_score
-        }
-
     def train_step(self, model, sess):
-        batch_queries, batch_replies, batch_labels, \
+        batch_queries, batch_replies, \
         batch_queries_lengths, batch_replies_lengths = next(self.data.next_batch(self.batch_size))
 
         feed_dict = {model.input_queries: batch_queries,
                      model.input_replies: batch_replies,
-                     model.input_labels: batch_labels,
                      model.queries_lengths: batch_queries_lengths,
                      model.replies_lengths: batch_replies_lengths,
                      model.is_training: True}
@@ -139,6 +132,13 @@ class MatchingModelTrainer(BaseTrainer):
         val_loss = np.sum(losses) / num_instances
         val_score = np.sum(scores) / num_instances
 
+        # summarize val loss and score
+        self.summary_writer.summarize(global_step,
+                                      summarizer="val",
+                                      summaries_dict={"score": val_score,
+                                                      "loss": val_loss})
+
+        # save as best model if it is best score
         best_loss = getattr(self.config, "best_loss", 1e+5)
         if val_loss < best_loss:
             setattr(config, "best_loss", val_loss)
@@ -146,42 +146,56 @@ class MatchingModelTrainer(BaseTrainer):
                        os.path.join(config.checkpoint_dir, "best_loss", "best_loss" + ".ckpt"))
             self.logger.warn("[Step {}] Saved for best loss : {:.5f}".format(global_step, best_loss))
             # if best model, infer for the test set
+
+            # save best config
+            setattr(config, "best_step", self.global_step)
+            setattr(config, "best_epoch", self.cur_epoch)
             save_config(config.checkpoint_dir, config)
         return val_loss, val_score
 
     def infer(self, model, sess, global_step):
-        # load best model
-        model.load(sess, tf.train.latest_checkpoint(self.config.checkpoint_dir))
-        return None
+        # load latest model
+        model.load(sess)
+        test_data_dict = data.test_data
+        predictions = model.infer(sess, feed_dict=test_data_dict)
+        return predictions
 
     def train(self):
         # build train, val, test, infer graph
         train_model, train_sess = self.build_graph(name="train")
         val_model, val_sess = self.build_graph(name="val")
         infer_model, infer_sess = self.build_graph(name="infer")
-        summaries_dict = dict()
 
+        # define summaries dict
+        summaries_dict = {"train_loss": 0,
+                          "train_score": 0,
+                          "val_loss": 0,
+                          "val_score": 0}
+
+        loop = tqdm(range(1, self.num_steps_per_epoch+1))
         for cur_epoch in range(train_model.cur_epoch_tensor.eval(train_sess), self.config.num_epochs + 1, 1):
             train_sess.run(train_model.increment_cur_epoch_tensor)
             losses = list()
             scores = list()
-            for step in range(1, self.num_steps_per_epoch+1):
-                train_score, train_loss = self.train_step(train_model, train_sess)
-                losses.append(train_loss)
-                scores.append(train_score)
+            for step in loop:
+                score, loss = self.train_step(train_model, train_sess)
+                losses.append(loss)
+                scores.append(score)
 
                 if self.global_step % self.config.save_every == 0:
                     train_model.save(train_sess, os.path.join(config.checkpoint_dir, "model.ckpt"))
 
                 if self.global_step % self.config.evaluate_every == 0:
                     val_loss, val_score = self.val(val_model, val_sess)
-                    self.logger.warn(self.train_summary.format(self.cur_epoch, train_loss, train_score) \
+                    train_loss, train_score = np.mean(losses), np.mean(scores)
+                    summaries_dict["train_loss"], summaries_dict["train_score"] = train_loss, train_score
+                    self.summary_writer.summarize(self.global_step, summaries_dict=summaries_dict)
+                    self.logger.warn(self.train_summary.format(self.cur_epoch, step, train_loss, train_score) \
                                      + self.val_summary.format(val_loss, val_score))
 
             # val step
             val_loss, val_score = self.val(val_model, val_sess, global_step)
-            summaries_dict['val_loss'], summaries_dict['val_accuracy'] = val_loss, val_score
+            summaries_dict['val_loss'], summaries_dict['val_score'] = val_loss, val_score
             self.logger.warn(self.train_summary.format(self.cur_epoch, train_loss, train_score) \
                                  + self.val_summary.format(val_loss, val_score))
-
-            self.summary_writer.summarize(cur_it, summaries_dict=summaries_dict)
+            self.summary_writer.summarize(self.global_step, summaries_dict=summaries_dict)

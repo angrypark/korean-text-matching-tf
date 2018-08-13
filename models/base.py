@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+from utils.logger import setup_logger
 
 class BaseModel:
     def __init__(self, preprocessor, config):
@@ -8,6 +8,7 @@ class BaseModel:
         self.init_global_step()
         self.init_cur_epoch()
         self.init_saver()
+        self.logger = setup_logger()
 
     # save function that saves the checkpoint in the path defined in the config file
     def save(self, sess, save_dir):
@@ -21,6 +22,8 @@ class BaseModel:
             print("Loading model checkpoint {}_{} ...\n".format(self.config.name, latest_checkpoint))
             self.saver.restore(sess, latest_checkpoint)
             print("Model loaded")
+        else:
+            self.logger.error("No checkpoint found in {}".format(self.config.checkpoint_dir))
 
     # just initialize a tensorflow variable to use it as epoch counter
     def init_cur_epoch(self):
@@ -30,7 +33,6 @@ class BaseModel:
 
     # just initialize a tensorflow variable to use it as global step counter
     def init_global_step(self):
-        # DON'T forget to add the global step tensor to the tensorflow trainer
         with tf.variable_scope('global_step'):
             self.global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
             self.increment_global_step_tensor = tf.assign(self.global_step_tensor, self.global_step_tensor + 1)

@@ -88,7 +88,10 @@ class DualEncoderLSTM(BaseModel):
             self.train_step = self.optimizer.minimize(self.loss, global_step=self.global_step_tensor)
 
         # Calculate accuracy
-        with tf.name_scope("accuracy"):
-            predictions = tf.cast(tf.argmax(self.logits, 1), tf.int32)
-            correct_predictions = tf.equal(predictions, self.input_labels)
-            self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
+        with tf.name_scope("score"):
+            self.predictions = tf.cast(tf.argmax(self.logits, 1), tf.int32)
+            correct_predictions = tf.equal(self.predictions, self.input_labels)
+            self.score = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
+
+    def infer(self, sess, feed_dict=None):
+        return sess.run(self.predictions, feed_dict=feed_dict)

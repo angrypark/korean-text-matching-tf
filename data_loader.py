@@ -11,6 +11,7 @@ class DataGenerator:
         # split data into lines and lables
         train_queries, train_replies, train_labels = split_data(train_set)
         val_queries, val_replies, val_labels = split_data(val_set)
+        test_queries, test_replies, test_labels = load_test_data()
         
         # build preprocessor
         self.preprocessor = preprocessor
@@ -19,10 +20,13 @@ class DataGenerator:
         # preprocess line and make it to a list of word indices
         train_queries, train_queries_lengths = zip(*[self.preprocessor.preprocess(query) for query in train_queries])
         train_replies, train_replies_lengths = zip(*[self.preprocessor.preprocess(reply) for reply in train_replies])
-        
+
         val_queries, val_queries_lengths = zip(*[self.preprocessor.preprocess(query) for query in val_queries])
         val_replies, val_replies_lengths = zip(*[self.preprocessor.preprocess(reply) for reply in val_replies])
-        
+
+        test_queries, test_queries_lengths = zip(*[self.preprocessor.preprocess(query) for query in test_queries])
+        test_replies, test_replies_lengths = zip(*[self.preprocessor.preprocess(reply) for reply in test_replies])
+
         train_queries, train_replies = np.array(train_queries), np.array(train_replies)
         val_queries, val_replies = np.array(val_queries), np.array(val_replies)
         
@@ -33,6 +37,8 @@ class DataGenerator:
         
         data['val_queries'], data['val_replies'], data['val_labels'] = val_queries, val_replies, val_labels
         data['val_queries_lengths'], data['val_replies_lengths'] = val_queries_lengths, val_replies_lengths
+
+
         self.data = data
 
     def next_batch(self, batch_size):
@@ -63,3 +69,13 @@ def load_data(train_dir, val_dir, small=False):
 def split_data(data):
     queries, replies, labels = zip(*[line.split('\t') for line in data])
     return queries, replies, labels
+
+def load_test_data():
+    base_dir = "/home/angrypark/reply_matching_model/data/"
+    with open(os.path.join(base_dir, "test_queries.txt"), "r") as f:
+        test_queries = [line.strip() for line in f]
+    with open(os.path.join(base_dir, "test_replies.txt"), "r") as f:
+        test_replies = [line.strip().split("\t") for line in f]
+    with open(os.path.join(base_dir, "test_labels.txt"), "r") as f:
+        test_labels = [[int(y) for y in line.strip().split("\t")] for line in f]
+    return test_queries, test_replies, test_labels
