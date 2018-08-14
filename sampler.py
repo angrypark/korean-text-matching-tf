@@ -5,15 +5,6 @@ class BaseSampler(ABC):
     def __init__(self, config):
         pass
 
-    def fit(self, sentences):
-        pass
-
-    def state_dict(self):
-        pass
-
-    def load_state_dict(self):
-        pass
-
     @abstractmethod
     def sample(self, queries, replies, num_samples=9):
         pass
@@ -23,12 +14,17 @@ class RandomSampler(BaseSampler):
     def __init__(self, config):
         self.batch_size = config.batch_size
 
-    def fit(self, sentences):
-        self.candidates = sentences
-
     def sample(self, queries, replies, num_samples=9, add_echo=True):
-        sampled_queries = list()
-        sampled_replies = list()
+        """
+        get queries, replies and returns index of sampled queries, index of samples replies and labels
+        :param queries: queries batch
+        :param replies: replies batch
+        :param num_samples: if 9, get 9 negative samples per 1 positive sample
+        :param add_echo: if True, add input query as negative sample of replies
+        :return:
+        """
+        sampled_queries_indices = list()
+        sampled_replies_indices = list()
         labels = list()
         for query, reply in zip(queries, replies):
             sampled_queries += [query]*(num_samples+1)

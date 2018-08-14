@@ -21,6 +21,67 @@ def get_embeddings(idx2word, config):
         print("No pre-trained embedding found, initialize with random distribution")
     return embedding
 
+def pairwise_distances(queries_embedding, replies_embedding, squared=False):
+    """Compute the 2D matrix of distances between queries and replies
+    Args:
+        queries_embedding : tensor of shape (batch_size, embed_dim)
+        replies_embeddings: tensor of shape (batch_size, embed_dim)
+        squared: Boolean. If true, output is the pairwise squared euclidean distance matrix.
+                 If false, output is the pairwise euclidean distance matrix.
+    Returns:
+        pairwise_distances: tensor of shape (batch_size, batch_size)
+    """
+    # Get the dot product between all embeddings
+    # shape (batch_size, batch_size)
+    dot_product = tf.matmul(queries_embedding, tf.transpose(replies_embedding))
+
+    # Get squared L2 norm for each embedding. We can just take the diagonal of `dot_product`.
+    # This also provides more numerical stability (the diagonal of the result will be exactly 0).
+    # shape (batch_size,)
+    square_norm = tf.diag_part(dot_product)
+
+    # Compute the pairwise distance matrix as we have:
+    # ||a - b||^2 = ||a||^2  - 2 <a, b> + ||b||^2
+    # shape (batch_size, batch_size)
+    distances = tf.expand_dims(square_norm, 1) - 2.0 * dot_product + tf.expand_dims(square_norm, 0)
+
+    # Because of computation errors, some distances might be negative so we put everything >= 0.0
+    distances = tf.maximum(distances, 0.0)
+
+    if not squared:
+        # Because the gradient of sqrt is infinite when distances == 0.0 (ex: on the diagonal)
+        # we need to add a small epsilon where distances == 0.0
+        mask = tf.to_float(tf.equal(distances, 0.0))
+        distances = distances + mask * 1e-16
+
+        distances = tf.sqrt(distances)
+
+        # Correct the epsilon added: set the distances on the mask to be exactly 0.0
+        distances = distances * (1.0 - mask)
+    return distances
+
+def make_negative_mask(distance_matrix, method="random", num_negative_samples=2):
+    length = distance_matrix.shape[0]
+    mask = np.zeros([length, length])
+    if method == "random":
+        for i in range(length):
+            indices = np.random.choice([j for j in range(length) if j != i], size=num_negative_samples, replace=False)
+            mask[i, indices] = -1
+            mask[i, i] = 0
+    elif method == "hard":
+        argsort = np.argsort(distance_matrix)
+        for i, indices in enumerate(argsort.tolist()):
+            indices.remove(i)
+            mask[i, indices[:num_negative_samples]] = -1
+            mask[i, i] = 0
+    elif method == "weighted":
+        argsort = np.argsort(embedding, axis=1)
+        interval = length//num_negative_samples
+        for i, indices in enumerate(argsort.tolist()):
+            indices.remove(i)
+            mask[i, indices[::interval]] = -1
+            mask[i, i] = 0
+    return mask
 
 class DualEncoderLSTM(BaseModel):
     def __init__(self, preprocessor, config):
@@ -34,11 +95,11 @@ class DualEncoderLSTM(BaseModel):
 
         self.queries_lengths = tf.placeholder(tf.int32, [None], name="query_lengths")
         self.replies_lengths = tf.placeholder(tf.int32, [None], name="reply_lengths")
-        self.input_labels = tf.placeholder(tf.int32, [None], name="labels")
-        
-        self.is_training = tf.placeholder(tf.bool)
 
-        # Define Optimizer
+        self.is_training = tf.placeholder(tf.bool)
+        batch_length = self.input_queries.shape[0]
+
+        # Define optimizer
         self.optimizer = tf.train.AdamOptimizer(self.config.learning_rate)
 
         # Embedding layer
@@ -58,7 +119,7 @@ class DualEncoderLSTM(BaseModel):
             lstm_outputs, lstm_states = tf.nn.dynamic_rnn(
                 cell=lstm_cell,
                 inputs=tf.concat([queries_embedded, replies_embedded], 0),
-                sequence_length=tf.concat([self.queries_lengths, self.replies_lengths], 0), 
+                sequence_length=tf.concat([self.queries_lengths, self.replies_lengths], 0),
                 dtype=tf.float32,
             )
             encoding_queries, encoding_replies = tf.split(lstm_states.h, 2, 0)
@@ -73,25 +134,42 @@ class DualEncoderLSTM(BaseModel):
             generated_replies = tf.expand_dims(generated_replies, 2)
             encoding_replies = tf.expand_dims(encoding_replies, 2)
 
-            # Dot product between generated replies and actual replies
-            logits = tf.matmul(generated_replies, encoding_replies, True)
-            self.logits = tf.squeeze(logits, [2])
-            
-            # Apply sigmoid to convert logits to probabilities
-            self.probs = tf.sigmoid(self.logits)
+        with tf.variable_scope("negative_sampling") as vs:
+            distances = pairwise_distances(generated_replies, encoding_replies)
+            with tf.Session().as_default():
+                distance_matrix = distances.eval()
+                mask = make_negative_mask(distance_matrix)
+            mask = tf.reshape(tf.constant(mask), [-1])
+
+        with tf.variable_scope("loss"):
+            positive_logits = tf.matmul(generated_replies, encoding_replies, True)
+            positive_logits = tf.squeeze(positive_logits, [2])
+            negative_logits = tf.gather(tf.reshape(distances, [-1], tf.where(mask), 1))
+            num_positives = tf.shape(positive_logits)[0]
+            num_negatives = tf.shape(negative_logits)[0]
+            self.logits = tf.concat([positive_logits, negative_logits], 0)
+
+        # Apply sigmoid to convert logits to probabilities
+        self.probs = tf.sigmoid(positive_logits)
 
         # Calculate mean cross-entropy loss
         with tf.variable_scope("loss"):
-            labels = tf.reshape(tf.cast([self.input_labels], tf.int64), [-1, 1])
-            losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.to_float(labels))
+            self.labels = tf.concat([tf.ones([num_positives, 1]), tf.zeros([num_negatives, 1])], 0)
+            losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.to_float(self.labels))
             self.loss = tf.reduce_mean(losses)
             self.train_step = self.optimizer.minimize(self.loss, global_step=self.global_step_tensor)
 
         # Calculate accuracy
         with tf.name_scope("score"):
             self.predictions = tf.cast(tf.argmax(self.logits, 1), tf.int32)
-            correct_predictions = tf.equal(self.predictions, self.input_labels)
+            correct_predictions = tf.equal(self.predictions, self.labels)
             self.score = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
 
+    def val(self, sess, feed_dict=None):
+        result = dict()
+        result["loss"] = sess.run(self.loss, feed_dict=feed_dict)
+        result["score"] = sess.run(self.score, feed_dict=feed_dict)
+        return result
+
     def infer(self, sess, feed_dict=None):
-        return sess.run(self.predictions, feed_dict=feed_dict)
+        return sess.run(self.probs, feed_dict=feed_dict)
