@@ -1,3 +1,4 @@
+import os
 from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
@@ -16,7 +17,7 @@ class BaseTrainer:
         self.summary_writer = summary_writer
 
         self.logger = setup_logger()
-        self.init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
+        self.preprocessor.build_preprocessor()
 
     def train(self):
         for cur_epoch in range(self.model.cur_epoch_tensor.eval(self.sess), self.config.num_epochs + 1, 1):
@@ -41,8 +42,8 @@ class BaseTrainer:
 
 
 class MatchingModelTrainer(BaseTrainer):
-    def __init__(self, sess, preprocessor, data, sampler, config, summary_writer):
-        super(Trainer, self).__init__(sess, preprocessor, data, sampler, config, summary_writer)
+    def __init__(self, sess, preprocessor, data, config, summary_writer):
+        super(MatchingModelTrainer, self).__init__(sess, preprocessor, data, config, summary_writer)
         # get size of data
         self.train_size = data.train_size
         self.val_size = data.val_size
@@ -57,41 +58,49 @@ class MatchingModelTrainer(BaseTrainer):
         self.summary_dict = dict()
         self.train_summary = "Epoch : {:2d} | Step : {:8d} | Train loss : {:.4f} | Train accuracy : {:.4f} "
         self.val_summary = "| Val loss : {:.4f} | Val accuracy : {:.4f} "
+    
+        # get train and validation iterator
+        self.train_iterator = data.get_train_iterator(self.batch_size)
+        
+        # checkpoint_dir
+        self.checkpoint_dir = config.checkpoint_dir
 
     def build_graph(self, name="train"):
         graph = tf.Graph()
         tf_config = tf.ConfigProto()
         tf_config.gpu_options.allow_growth = True
-        # train graph
+
         with graph.as_default():
             self.logger.info("Building {} graph...".format(name))
-            model = get_model(self.config.model_name)
+            Model = get_model(self.config.model)
+            model = Model(self.preprocessor, self.config)
             sess = tf.Session(config=tf_config, graph=graph)
-            if (self.config.checkpoint_path) and (name == "train"):
+            sess.run(tf.global_variables_initializer())
+            sess.run(tf.local_variables_initializer())
+            if (self.config.checkpoint_dir) and (name == "train"):
                 self.logger.info('Loading checkpoint from {}'.format(
-                    config.checkpoint_dir))
-                model.load(train_sess, config.checkpoint_dir)
+                    self.checkpoint_dir))
+                model.load(sess)
                 self.global_step = model.global_step_tensor.eval(sess)
-            else:
-                sess.run(self.init)
         return model, sess
 
     def train_step(self, model, sess):
         batch_queries, batch_replies, \
-        batch_queries_lengths, batch_replies_lengths = next(self.data.next_batch(self.batch_size))
+        batch_queries_lengths, batch_replies_lengths = next(self.train_iterator)
 
+        cur_batch_length = len(batch_queries)
 
         feed_dict = {model.input_queries: batch_queries,
                      model.input_replies: batch_replies,
                      model.queries_lengths: batch_queries_lengths,
-                     model.replies_lengths: batch_replies_lengths,
-                     model.is_training: True}
+                     model.replies_lengths: batch_replies_lengths
+                    }
 
-        _, loss, score = sess.run([model.train_step, model.loss, model.accuracy],
+        _, loss, score = sess.run([model.train_step, model.loss, model.score],
                                      feed_dict=feed_dict)
         sess.run(model.increment_global_step_tensor)
         self.global_step += 1
-        return loss, score
+        return loss, score, cur_batch_length
 
     def train_epoch(self, model, sess):
         """Not used because data size is too big"""
@@ -108,45 +117,43 @@ class MatchingModelTrainer(BaseTrainer):
         train_score = np.mean(scores)
 
     def train(self):
-        # build train, val, test, infer graph
+        # build train, val graph 
         train_model, train_sess = self.build_graph(name="train")
         val_model, val_sess = self.build_graph(name="val")
-
-        # define summaries dict
-        summaries_dict = {"train_loss": 0,
-                          "train_score": 0,
-                          "val_loss": 0,
-                          "val_score": 0}
-
+        
         loop = tqdm(range(1, self.num_steps_per_epoch+1))
         for cur_epoch in range(train_model.cur_epoch_tensor.eval(train_sess), self.config.num_epochs + 1, 1):
             train_sess.run(train_model.increment_cur_epoch_tensor)
+            self.cur_epoch = cur_epoch
             losses = list()
             scores = list()
+            
             for step in loop:
-                score, loss = self.train_step(train_model, train_sess)
+                loss, score, cur_batch_length = self.train_step(train_model, train_sess)
                 losses.append(loss)
                 scores.append(score)
+                self.summary_writer.summarize(self.global_step, 
+                                              summarizer="train", 
+                                              summaries_dict={"loss": np.array(loss), 
+                                                              "score": np.array(score)}
+                                             )
 
                 if self.global_step % self.config.save_every == 0:
-                    train_model.save(train_sess, os.path.join(config.checkpoint_dir, "model.ckpt"))
+                    train_model.save(train_sess, os.path.join(self.checkpoint_dir, "model.ckpt"))
 
                 if self.global_step % self.config.evaluate_every == 0:
                     val_loss, val_score = self.val(val_model, val_sess)
                     train_loss, train_score = np.mean(losses), np.mean(scores)
-                    summaries_dict["train_loss"], summaries_dict["train_score"] = train_loss, train_score
-                    self.summary_writer.summarize(self.global_step, summaries_dict=summaries_dict)
                     self.logger.warn(self.train_summary.format(self.cur_epoch, step, train_loss, train_score) \
                                      + self.val_summary.format(val_loss, val_score))
 
             # val step
-            self.logger.warn("=============== Epoch {} Done ! ===============".format(cur_epoch))
-            train_model.save(train_sess, config.checkpoint_dir, "model.ckpt")
-            val_loss, val_score = self.val(val_model, val_sess, global_step)
-            summaries_dict['val_loss'], summaries_dict['val_score'] = val_loss, val_score
-            self.logger.warn(self.train_summary.format(self.cur_epoch, train_loss, train_score) \
+            self.logger.warn("="*35, " Epoch {} Done ! ".format(cur_epoch+1), "="*35)
+            train_model.save(train_sess, os.path.join(self.checkpoint_dir, "model.ckpt"))
+            train_loss, train_score = np.mean(losses), np.mean(scores)
+            val_loss, val_score = self.val(val_model, val_sess, self.global_step)
+            self.logger.warn(self.train_summary.format(cur_epoch+1, self.global_step, train_loss, train_score) \
                                  + self.val_summary.format(val_loss, val_score))
-            self.summary_writer.summarize(self.global_step, summaries_dict=summaries_dict)
 
     def val(self, model, sess, global_step):
         # load latest checkpoint
@@ -154,46 +161,39 @@ class MatchingModelTrainer(BaseTrainer):
 
         losses = list()
         scores = list()
-        num_instances = 0
-
+        val_iterator = self.data.get_val_iterator(self.batch_size)
         num_batches_per_epoch = (self.data.val_size - 1) // self.batch_size + 1
-        val_queries, val_replies, val_queries_lengths, val_replies_lengths = self.data.load_val_data()
-        for batch_num in range(num_batches_per_epoch):
-            start_idx = batch_num * self.batch_size
-            end_idx = min((batch_num + 1) * self.batch_size, self.val_size)
-            batch_length = end_idx - start_idx
-            feed_dict = {model.input_queries: val_queries[start_idx:end_idx],
-                         model.input_replies: val_replies[start_idx:end_idx],
-                         model.queries_lengths: val_queries_lengths[start_idx:end_idx],
-                         model.replies_lengths: val_replies_lengths[start_idx:end_idx],
-                         model.is_training: False}
-            result = model.val(sess, feed_dict=feed_dict)
-            losses.append(result["loss"] * batch_length)
-            scores.append(result["score"] * batch_length)
-            num_instances += batch_size
+        loop = tqdm(range(1, num_batches_per_epoch+1))
 
-        val_loss = np.sum(losses) / num_instances
-        val_score = np.sum(scores) / num_instances
+        for step in loop:
+            val_queries, val_replies, val_queries_lengths, val_replies_lengths = next(val_iterator)
+            feed_dict = {model.input_queries: val_queries,
+                         model.input_replies: val_replies,
+                         model.queries_lengths: val_queries_lengths,
+                         model.replies_lengths: val_replies_lengths}
+            loss, score, _ = model.val(sess, feed_dict=feed_dict)
+            losses.append(loss)
+            scores.append(score)
+        val_loss = np.mean(losses)
+        val_score = np.mean(scores)
 
         # summarize val loss and score
         self.summary_writer.summarize(global_step,
                                       summarizer="val",
-                                      summaries_dict={"score": val_score,
-                                                      "loss": val_loss})
+                                      summaries_dict={"score": np.array(val_loss),
+                                                      "loss": np.array(val_score)})
 
         # save as best model if it is best score
-        best_loss = getattr(self.config, "best_loss", 1e+5)
+        best_loss = float(getattr(self.config, "best_loss", 1e+5))
         if val_loss < best_loss:
-            setattr(config, "best_loss", val_loss)
+            self.logger.warn("[Step {}] Saving for best loss : {:.5f} -> {:.5f}".format(global_step, best_loss, val_loss))
             model.save(sess,
-                       os.path.join(config.checkpoint_dir, "best_loss", "best_loss" + ".ckpt"))
-            self.logger.warn("[Step {}] Saved for best loss : {:.5f}".format(global_step, best_loss))
-            # if best model, infer for the test set
-
+                       os.path.join(self.checkpoint_dir, "best_loss", "best_loss.ckpt"))
+            setattr(self.config, "best_loss", "{:.5f}".format(val_loss))
             # save best config
-            setattr(config, "best_step", self.global_step)
-            setattr(config, "best_epoch", self.cur_epoch)
-            save_config(config.checkpoint_dir, config)
+            setattr(self.config, "best_step", str(self.global_step))
+            setattr(self.config, "best_epoch", str(self.cur_epoch))
+            save_config(self.config.checkpoint_dir, self.config)
         return val_loss, val_score
 
     def infer(self, model, sess, global_step):

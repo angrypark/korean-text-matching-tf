@@ -18,16 +18,12 @@ class Preprocessor:
 
     def _preprocess(self, sentence):
         normalized_sentence = self.normalizer.normalize(sentence)
-        tokenized_sentence = self.tokenizer.tokenize(normalized_sentence)
-        extracted_features = dict()
-        for feature_name, feature_extractor in self.feature_extractors:
-            extracted_features[feature_name] = feature_extractor.extract_feature(
-                [sentence, tokenized_sentence])
+        tokenized_sentence = ["<SOS>"] + self.tokenizer.tokenize(normalized_sentence) + ["<EOS>"]
         indexed_sentence = [self.vectorizer.indexer(token) for token in tokenized_sentence]
-        return indexed_sentence, extracted_features
+        return indexed_sentence
 
     def preprocess(self, sentence):
-        indexed_sentence, _ = self._preprocess(sentence)
+        indexed_sentence = self._preprocess(sentence)
         padded_sentence = pad_sequences([indexed_sentence], maxlen=self.max_length)[0]
         return padded_sentence
 
@@ -41,22 +37,17 @@ class DynamicPreprocessor:
         self.tokenizer = Tokenizer(config)
         self.vectorizer = vectorizers.Vectorizer(self.tokenizer, config)
 
-    def build_preprocessor(self, lines):
-        self.vectorizer.build_vectorizer(lines)
-        self.feature_extractors = list()
+    def build_preprocessor(self):
+        self.vectorizer.build_vectorizer()
 
     def _preprocess(self, sentence):
         normalized_sentence = self.normalizer.normalize(sentence)
-        tokenized_sentence = self.tokenizer.tokenize(normalized_sentence)
-        extracted_features = dict()
-        for feature_name, feature_extractor in self.feature_extractors:
-            extracted_features[feature_name] = feature_extractor.extract_feature(
-                [sentence, tokenized_sentence])
-        indexed_sentence = [self.vectorizer.indexer(token) for token in tokenized_sentence]
-        return indexed_sentence, extracted_features
+        tokenized_sentence = ["<SOS>"] + self.tokenizer.tokenize(normalized_sentence) + ["<EOS>"]
+        indexed_sentence = [self.vectorizer.indexer(token) for token in tokenized_sentence] 
+        return indexed_sentence
 
     def preprocess(self, sentence):
-        indexed_sentence, _ = self._preprocess(sentence)
+        indexed_sentence = self._preprocess(sentence)
         length = len(indexed_sentence)
         padded_sentence = pad_sequences([indexed_sentence], maxlen=self.max_length)[0]
         return padded_sentence, length

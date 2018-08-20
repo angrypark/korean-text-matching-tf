@@ -11,4 +11,4 @@ def load_config(path):
 
 def save_config(path, config):
     with open(os.path.join(path, "config.json"), "w", encoding="utf-8") as f:
-        json.dump(config.to_json(), f)
+        json.dump(vars(config), f)

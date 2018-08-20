@@ -90,7 +90,7 @@ class SoyNLPTokenizer(BaseTokenizer):
 class SentencePieceTokenizer(BaseTokenizer):
     def __init__(self, config):
         self.tokenizer = spm.SentencePieceProcessor()
-        self.tokenizer.Load(config.sentence_piece_model)
+        self.tokenizer.Load(config.sent_piece_model)
     
     def tokenize(self, sentence):
         tokens = self.tokenizer.EncodeAsPieces(sentence)

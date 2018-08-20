@@ -8,12 +8,15 @@ def create_dirs(config):
     :return exit_code: 0:success -1:failed
     """
     try:
-        dir = os.path.join(config.checkpoint_dir, "runs/{}".format(config.name))
+        checkpoint_dir = config.checkpoint_dir
+        name = config.name
+        dir = os.path.join(checkpoint_dir, name)
         if not os.path.exists(dir):
             os.makedirs(dir)
-            os.makedirs(dir + "/checkpoint")
-            os.makedirs(dir + "/summaries")
-        return 0
+            # os.makedirs(dir + "/checkpoint/")
+            os.makedirs(dir + "/summaries/")
+            config.checkpoint_dir = dir + "/"
+        return config
 
     except Exception as err:
         print("Creating directories error: {0}".format(err))

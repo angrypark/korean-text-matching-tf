@@ -65,10 +65,10 @@ def setup_logger():
             'CRITICAL': 'red',
         }
     )
-
-    logger = logging.getLogger('example')
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
+    logger = logging.getLogger('my_logger')
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
     return logger
