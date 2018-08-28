@@ -16,6 +16,7 @@ def get_embeddings(idx2word, config):
                 embedding[i, :] = ft.wv[processor.word_to_jamo(vocab)]
             except:
                 num_oov += 1
+        print("Pre-trained embedding loaded. Number of OOV : {} / {}".format(num_oov, len(idx2word)))
     else:
         print("No pre-trained embedding found, initialize with random distribution")
     return embedding
@@ -23,15 +24,10 @@ def get_embeddings(idx2word, config):
 def make_negative_mask(distances, method="random", num_negative_samples=2, batch_size=256):
     if method == "random":
         mask = np.zeros([batch_size, batch_size])
-        #for i in range(batch_size):
-        #    indices = np.random.choice([j for j in range(batch_size) if j != i], size=num_negative_samples, replace=False)
-        #    mask[i, indices] = True
-        #    mask[i, i] = False
         for i in range(batch_size):
-            if i < batch_size - 1:
-                mask[i, i+1] = 1.
-            else:
-                mask[i, 0] = 1.
+            indices = np.random.choice([j for j in range(batch_size) if j != i], size=num_negative_samples, replace=False)
+            mask[i, indices] = True
+            mask[i, i] = False
         mask = tf.convert_to_tensor(mask)
     elif method == "hard":
         top_k = tf.contrib.framework.sort(tf.expand_dims(tf.nn.top_k(-distances, k=num_negative_samples+1).indices, -1), axis=1)
@@ -64,22 +60,26 @@ class DualEncoderLSTM(BaseModel):
     def build_model(self):
         with tf.variable_scope("inputs"):
             # Placeholders for input, output
-            self.input_queries = tf.placeholder(tf.int32, [None, self.config.max_length])
-            self.input_replies = tf.placeholder(tf.int32, [None, self.config.max_length])
+            self.input_queries = tf.placeholder(tf.int32, [None, self.config.max_length], name="input_queries")
+            self.input_replies = tf.placeholder(tf.int32, [None, self.config.max_length], name="input_replies")
 
-            self.queries_lengths = tf.placeholder(tf.int32, [None])
-            self.replies_lengths = tf.placeholder(tf.int32, [None])
+            self.queries_lengths = tf.placeholder(tf.int32, [None], name="queries_length")
+            self.replies_lengths = tf.placeholder(tf.int32, [None], name="replies_length")
+            self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
 
         cur_batch_length = tf.shape(self.input_queries)[0]
 
-        # Define optimizer
-        self.optimizer = tf.train.AdamOptimizer(self.config.learning_rate)
+        # Define learning rate and optimizer
+        learning_rate = tf.train.exponential_decay(self.config.learning_rate, 
+                                                   self.global_step_tensor,
+                                                   decay_steps=50000, 
+                                                   decay_rate=0.96,
+                                                   staircase=True)
+        self.optimizer = tf.train.AdamOptimizer(learning_rate)
 
         # Embedding layer
-        # embeddings = tf.Variable(tf.random_uniform([self.config.vocab_size, self.config.embed_dim], -1.0, 1.0), name="embeddings")
         with tf.variable_scope("embedding"):
             embeddings = tf.Variable(get_embeddings(self.preprocessor.vectorizer.idx2word, self.config), trainable=True, name="embeddings")
-
             queries_embedded = tf.nn.embedding_lookup(embeddings, self.input_queries, name="queries_embedded")
             replies_embedded = tf.nn.embedding_lookup(embeddings, self.input_replies, name="replies_embedded")
             queries_embedded, replies_embedded = tf.cast(queries_embedded, tf.float32), tf.cast(replies_embedded, tf.float32)
@@ -91,12 +91,15 @@ class DualEncoderLSTM(BaseModel):
                                                      use_peepholes=True,
                                                      state_is_tuple=True,
                                                      name='send')
+            send_lstm_cell = tf.contrib.rnn.DropoutWrapper(send_lstm_cell,
+                                                           input_keep_prob=self.dropout_keep_prob)
             recv_lstm_cell = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
                                                      forget_bias=2.0,
                                                      use_peepholes=True,
                                                      state_is_tuple=True,
                                                      name='recv')
-
+            recv_lstm_cell = tf.contrib.rnn.DropoutWrapper(recv_lstm_cell,
+                                                           input_keep_prob=self.dropout_keep_prob)
             _, encoding_queries = tf.nn.dynamic_rnn(
                 cell=send_lstm_cell,
                 inputs=queries_embedded,
@@ -109,8 +112,9 @@ class DualEncoderLSTM(BaseModel):
                 sequence_length=self.replies_lengths,
                 dtype=tf.float32,
             )
-            encoding_queries = encoding_queries.h
-            encoding_replies = encoding_replies.h
+        
+        encoding_queries = encoding_queries.h
+        encoding_replies = encoding_replies.h
 
         # Predict a response
         with tf.variable_scope("prediction") as vs:
@@ -120,7 +124,6 @@ class DualEncoderLSTM(BaseModel):
             encoding_queries = tf.matmul(encoding_queries, M)
 
         with tf.variable_scope("negative_sampling") as vs:
-            # distances = pairwise_distances(encoding_queries, encoding_replies, squared=False)
             distances = tf.matmul(encoding_queries, tf.transpose(encoding_replies))
             positive_mask = tf.reshape(tf.eye(cur_batch_length), [-1])
             negative_mask = make_negative_mask(distances,
@@ -159,8 +162,8 @@ class DualEncoderLSTM(BaseModel):
     def val(self, sess, feed_dict=None):
         loss = sess.run(self.loss, feed_dict=feed_dict)
         score = sess.run(self.score, feed_dict=feed_dict)
-        probs = sess.run(self.probs, feed_dict=feed_dict)
-        return loss, score, probs
+        # probs = sess.run(self.probs, feed_dict=feed_dict)
+        return loss, score, None
 
     def infer(self, sess, feed_dict=None):
         return sess.run(self.positive_probs, feed_dict=feed_dict)

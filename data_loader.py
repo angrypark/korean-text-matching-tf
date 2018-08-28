@@ -6,15 +6,7 @@ class DataGenerator:
     def __init__(self, preprocessor, config):
         self.config = config
         self.preprocessor = preprocessor
-        test_queries, test_replies, test_labels = load_test_data()
-        data = {"test_queries": test_queries, "test_replies": test_replies, "test_labels": test_labels}
-        self.data = data
-        train_size = 0
-        for fname in os.listdir(config.train_dir):
-            with open(os.path.join(config.train_dir, fname), "r") as f:
-                length = sum([1 for line in f])
-                train_size += length
-        self.train_size = train_size
+        self.train_size = 298554955
         with open(config.val_dir, "r") as f:
             self.val_size = sum([1 for line in f])
         self.shuffle = config.shuffle
@@ -67,17 +59,40 @@ class DataGenerator:
             yield val_queries[start:end], val_replies[start:end], \
                   val_queries_lengths[start:end], val_replies_lengths[start:end]
             
-            
+    def load_test_data(self):
+        base_dir = "/home/angrypark/reply_matching_model/data/"
+        with open(os.path.join(base_dir, "test_queries.txt"), "r") as f:
+            test_queries = [line.strip() for line in f]
+        with open(os.path.join(base_dir, "test_replies.txt"), "r") as f:
+            replies_set = [line.strip().split("\t") for line in f]
+        with open(os.path.join(base_dir, "test_labels.txt"), "r") as f:
+            test_labels = [[int(y) for y in line.strip().split("\t")] for line in f]
+
+        test_queries, test_queries_lengths = zip(*[self.preprocessor.preprocess(query)
+                                                         for query in test_queries])
+        test_replies = list()
+        test_replies_lengths = list()
+        for replies in replies_set:
+            r, l = zip(*[self.preprocessor.preprocess(reply) for reply in replies])
+            test_replies.append(r)
+            test_replies_lengths.append(l)
+        return test_queries, test_replies, test_queries_lengths, test_replies_lengths, test_labels
+    
+    def _preprocess_single_line(self, line):
+        splits = line.split("\t")
+        query, reply = splits[1], splits[2]
+        indexed_query, query_length = self.preprocessor.preprocess(query)
+        indexed_reply, reply_length = self.preprocessor.preprocess(reply)
+        return indexed_query, indexed_reply, query_length, reply_length
+    
+    def get_dataset(self, batch_size):
+        filenames = os.listdir(self.config.train_dir)
+        dataset = tf.data.TextLineDataset(filenames)
+        dataset = dataset.map(lambda line:self._preprocess_single_line(line))
+        dataset = dataset.batch(batch_size)
+        dataset = dataset.make_one_shot_iterator()
+        return dataset
+
 def split_data(data):
     _, queries, replies = zip(*[line.split('\t') for line in data])
     return queries, replies
-
-def load_test_data():
-    base_dir = "/home/angrypark/reply_matching_model/data/"
-    with open(os.path.join(base_dir, "test_queries.txt"), "r") as f:
-        test_queries = [line.strip() for line in f]
-    with open(os.path.join(base_dir, "test_replies.txt"), "r") as f:
-        test_replies = [line.strip().split("\t") for line in f]
-    with open(os.path.join(base_dir, "test_labels.txt"), "r") as f:
-        test_labels = [[int(y) for y in line.strip().split("\t")] for line in f]
-    return test_queries, test_replies, test_labels

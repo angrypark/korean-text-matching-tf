@@ -2,6 +2,7 @@ import os
 from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
+import time
 
 from models.base import get_model
 from utils.logger import setup_logger
@@ -15,7 +16,6 @@ class BaseTrainer:
         self.data = data
         self.config = config
         self.summary_writer = summary_writer
-
         self.logger = setup_logger()
         self.preprocessor.build_preprocessor()
 
@@ -51,8 +51,8 @@ class MatchingModelTrainer(BaseTrainer):
 
         # initialize global step, epoch
         self.num_steps_per_epoch = (self.train_size - 1) // self.batch_size + 1
-        self.cur_epoch = 0
-        self.global_step = 0
+        self.cur_epoch = 1
+        self.global_step = 1
 
         # for summary and logger
         self.summary_dict = dict()
@@ -87,19 +87,18 @@ class MatchingModelTrainer(BaseTrainer):
     def train_step(self, model, sess):
         batch_queries, batch_replies, \
         batch_queries_lengths, batch_replies_lengths = next(self.train_iterator)
-
+        
         cur_batch_length = len(batch_queries)
 
         feed_dict = {model.input_queries: batch_queries,
                      model.input_replies: batch_replies,
                      model.queries_lengths: batch_queries_lengths,
-                     model.replies_lengths: batch_replies_lengths
+                     model.replies_lengths: batch_replies_lengths,
+                     model.dropout_keep_prob: self.config.dropout_keep_prob
                     }
-
         _, loss, score = sess.run([model.train_step, model.loss, model.score],
                                      feed_dict=feed_dict)
-        sess.run(model.increment_global_step_tensor)
-        self.global_step += 1
+        
         return loss, score, cur_batch_length
 
     def train_epoch(self, model, sess):
@@ -122,46 +121,76 @@ class MatchingModelTrainer(BaseTrainer):
         val_model, val_sess = self.build_graph(name="val")
         
         loop = tqdm(range(1, self.num_steps_per_epoch+1))
-        for cur_epoch in range(train_model.cur_epoch_tensor.eval(train_sess), self.config.num_epochs + 1, 1):
-            train_sess.run(train_model.increment_cur_epoch_tensor)
-            self.cur_epoch = cur_epoch
+        
+        # get global step and cur epoch from loaded model, zero if there is no loaded model
+        self.global_step = train_model.global_step_tensor.eval(train_sess)
+        self.cur_epoch = train_model.cur_epoch_tensor.eval(train_sess)
+        
+        for epoch in range(self.cur_epoch, self.config.num_epochs + 1, 1):
+            self.logger.warn("="*35 + " Epoch {} Start ! ".format(epoch) + "="*35)
+            self.cur_epoch = epoch
+            
+            # initialize loss and score
             losses = list()
             scores = list()
             
             for step in loop:
+                # skip trained batches
+                if ((epoch-1)*self.num_steps_per_epoch) + step < self.global_step:
+                    _, _, _, _ = next(self.train_iterator)
+                    continue
+
                 loss, score, cur_batch_length = self.train_step(train_model, train_sess)
+                
+                # increment global step
+                self.global_step += 1
+                train_sess.run(train_model.increment_global_step_tensor)
+                
+                # add loss and score
                 losses.append(loss)
                 scores.append(score)
-                self.summary_writer.summarize(self.global_step, 
-                                              summarizer="train", 
-                                              summaries_dict={"loss": np.array(loss), 
-                                                              "score": np.array(score)}
-                                             )
-
+                
+                # summarize every 50 steps
+                if self.global_step % 50 == 0:
+                    self.summary_writer.summarize(self.global_step, 
+                                                  summarizer="train", 
+                                                  summaries_dict={"loss": np.array(loss), 
+                                                                  "score": np.array(score)})
+                # save model
                 if self.global_step % self.config.save_every == 0:
                     train_model.save(train_sess, os.path.join(self.checkpoint_dir, "model.ckpt"))
-
+                
+                # evaluate model
                 if self.global_step % self.config.evaluate_every == 0:
-                    val_loss, val_score = self.val(val_model, val_sess)
+                    val_loss, val_score = self.val(val_model, val_sess, self.global_step)
                     train_loss, train_score = np.mean(losses), np.mean(scores)
                     self.logger.warn(self.train_summary.format(self.cur_epoch, step, train_loss, train_score) \
                                      + self.val_summary.format(val_loss, val_score))
+                    # initialize loss and score
+                    losses = list()
+                    scores = list()
 
             # val step
-            self.logger.warn("="*35, " Epoch {} Done ! ".format(cur_epoch+1), "="*35)
+            self.logger.warn("="*35 + " Epoch {} Done ! ".format(epoch+1) + "="*35)
             train_model.save(train_sess, os.path.join(self.checkpoint_dir, "model.ckpt"))
-            train_loss, train_score = np.mean(losses), np.mean(scores)
             val_loss, val_score = self.val(val_model, val_sess, self.global_step)
-            self.logger.warn(self.train_summary.format(cur_epoch+1, self.global_step, train_loss, train_score) \
-                                 + self.val_summary.format(val_loss, val_score))
+            self.logger.warn(self.val_summary.format(val_loss, val_score))
+            
+            # increment epoch tensor
+            train_sess.run(train_model.increment_cur_epoch_tensor)
 
     def val(self, model, sess, global_step):
         # load latest checkpoint
         model.load(sess)
-
+        
+        # initialize loss and score
         losses = list()
         scores = list()
+        
+        # get validation data
         val_iterator = self.data.get_val_iterator(self.batch_size)
+        
+        # define loop
         num_batches_per_epoch = (self.data.val_size - 1) // self.batch_size + 1
         loop = tqdm(range(1, num_batches_per_epoch+1))
 
@@ -170,7 +199,8 @@ class MatchingModelTrainer(BaseTrainer):
             feed_dict = {model.input_queries: val_queries,
                          model.input_replies: val_replies,
                          model.queries_lengths: val_queries_lengths,
-                         model.replies_lengths: val_replies_lengths}
+                         model.replies_lengths: val_replies_lengths, 
+                         model.dropout_keep_prob: 1}
             loss, score, _ = model.val(sess, feed_dict=feed_dict)
             losses.append(loss)
             scores.append(score)
@@ -180,8 +210,8 @@ class MatchingModelTrainer(BaseTrainer):
         # summarize val loss and score
         self.summary_writer.summarize(global_step,
                                       summarizer="val",
-                                      summaries_dict={"score": np.array(val_loss),
-                                                      "loss": np.array(val_score)})
+                                      summaries_dict={"score": np.array(val_score),
+                                                      "loss": np.array(val_loss)})
 
         # save as best model if it is best score
         best_loss = float(getattr(self.config, "best_loss", 1e+5))
@@ -196,9 +226,26 @@ class MatchingModelTrainer(BaseTrainer):
             save_config(self.config.checkpoint_dir, self.config)
         return val_loss, val_score
 
-    def infer(self, model, sess, global_step):
+    def test(self, model, sess, global_step):
         # load latest model
         model.load(sess)
-        test_data_dict = data.test_data
-        probs = model.infer(sess, feed_dict=test_data_dict)
-        return probs
+        test_queries, test_replies, test_queries_lengths, \
+        test_replies_lengths, test_labels = self.data.load_test_data()
+        
+        # flatten
+        row, col, _ = np.shape(test_replies)
+        test_queries_expanded = [[q]*col for q in test_queries]
+        test_queries_expanded = [y for x in test_queries_expanded for y in x]
+        test_queries_lengths_expanded = [[l]*col for l in test_queries_lengths]
+        test_queries_lengths_expanded = [y for x in test_queries_lengths_expanded for y in x]
+        test_replies = [y for x in test_replies for y in x]
+        test_replies_lengths = [y for x in test_replies_lengths for y in x]
+        
+        feed_dict = {model.input_queries: test_queries_expanded,
+                     model.input_replies: test_replies,
+                     model.queries_lengths: test_queries_lengths_expanded,
+                     model.replies_lengths: test_replies_lengths, 
+                     model.dropout_keep_prob: 1}
+        probs = model.infer(sess, feed_dict=feed_dict)
+        probs = np.reshape(probs, [row, col])
+        return probs, test_labels

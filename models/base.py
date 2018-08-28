@@ -17,23 +17,26 @@ class BaseModel:
         self.saver.save(sess, save_dir)
 
     # load latest checkpoint from the experiment path defined in the config file
-    def load(self, sess):
-        latest_checkpoint = tf.train.latest_checkpoint(self.config.checkpoint_dir)
-        if latest_checkpoint:
-            self.saver.restore(sess, latest_checkpoint)
+    def load(self, sess, model_dir=""):
+        if model_dir:
+            self.saver.restore(sess, model_dir)
         else:
-            self.logger.error("No checkpoint found in {}".format(self.config.checkpoint_dir))
+            latest_checkpoint = tf.train.latest_checkpoint(self.config.checkpoint_dir)
+            if latest_checkpoint:
+                self.saver.restore(sess, latest_checkpoint)
+            else:
+                self.logger.error("No checkpoint found in {}".format(self.config.checkpoint_dir))
         
     # just initialize a tensorflow variable to use it as epoch counter
     def init_cur_epoch(self):
         with tf.variable_scope('cur_epoch'):
-            self.cur_epoch_tensor = tf.Variable(0, trainable=False, name='cur_epoch')
+            self.cur_epoch_tensor = tf.Variable(1, trainable=False, name='cur_epoch')
             self.increment_cur_epoch_tensor = tf.assign(self.cur_epoch_tensor, self.cur_epoch_tensor + 1)
 
     # just initialize a tensorflow variable to use it as global step counter
     def init_global_step(self):
         with tf.variable_scope('global_step'):
-            self.global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
+            self.global_step_tensor = tf.Variable(1, trainable=False, name='global_step')
             self.increment_global_step_tensor = tf.assign(self.global_step_tensor, self.global_step_tensor + 1)
 
     def init_saver(self):

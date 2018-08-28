@@ -6,19 +6,15 @@ from colorlog import ColoredFormatter
 
 
 class SummaryWriter:
-    def __init__(self, sess,config):
+    def __init__(self, sess, config):
         self.sess = sess
         self.config = config
         self.summary_placeholders = {}
         self.summary_ops = {}
-        self.summary_dir = "runs/{}/summaries/".format(self.config.name)
+        self.summary_dir = self.config.checkpoint_dir + "summaries/"
         self.train_summary_writer = tf.summary.FileWriter(os.path.join(self.summary_dir, "train"),
                                                           self.sess.graph)
         self.test_summary_writer = tf.summary.FileWriter(os.path.join(self.summary_dir, "test"))
-        
-        # Save config file
-        with open(self.summary_dir + "config.json", "w") as f:
-            json.dump(config.__dict__, f)
 
     # it can summarize scalars and images.
     def summarize(self, step, summarizer="train", scope="", summaries_dict=None):
@@ -26,7 +22,7 @@ class SummaryWriter:
         :param step: the step of the summary
         :param summarizer: use the train summary writer or the test one
         :param scope: variable scope
-        :param summaries_dict: the dict of the summaries values (tag,value)
+        :param summaries_dict: the dict of the summaries values (tag, value)
         :return:
         """
         writer = self.train_summary_writer if summarizer == "train" else self.test_summary_writer
@@ -45,7 +41,6 @@ class SummaryWriter:
                             self.summary_ops[tag] = tf.summary.image(tag, self.summary_placeholders[tag])
 
                     summary_list.append(self.sess.run(self.summary_ops[tag], {self.summary_placeholders[tag]: value}))
-
                 for summary in summary_list:
                     writer.add_summary(summary, step)
                 writer.flush()
