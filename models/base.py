@@ -5,8 +5,8 @@ import os
 from utils.logger import setup_logger
 
 class BaseModel:
-    def __init__(self, preprocessor, config):
-        self.preprocessor = preprocessor
+    def __init__(self, data, config):
+        self.data = data
         self.config = config
         self.init_global_step()
         self.init_cur_epoch()

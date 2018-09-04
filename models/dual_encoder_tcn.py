@@ -22,22 +22,29 @@ def get_embeddings(idx2word, config):
         print("No pre-trained embedding found, initialize with random distribution")
     return embedding
 
-def make_negative_mask(distances, method="random", num_negative_samples=2, batch_size=256):
+def make_negative_mask(distances, num_negative_samples, method="random"):
+    cur_batch_length = tf.shape(distances)[0]
     if method == "random":
-        mask = np.zeros([batch_size, batch_size])
-        for i in range(batch_size):
-            indices = np.random.choice([j for j in range(batch_size) if j != i], size=num_negative_samples, replace=False)
-            mask[i, indices] = True
-            mask[i, i] = False
-        mask = tf.convert_to_tensor(mask)
+        topk = tf.contrib.framework.sort(tf.nn.top_k(tf.random_uniform([cur_batch_length, cur_batch_length]), k=num_negative_samples).indices, axis=1)
+        rows = tf.transpose(tf.reshape(tf.tile(tf.range(cur_batch_length), [num_negative_samples]), [num_negative_samples, cur_batch_length]))
+        indices = tf.to_int64(tf.reshape(tf.concat([tf.expand_dims(rows, -1), tf.expand_dims(topk, -1)], axis=2), [num_negative_samples*cur_batch_length, 2]))
+        mask = tf.sparse_to_dense(sparse_indices=indices, 
+                                  output_shape=[tf.to_int64(cur_batch_length), tf.to_int64(cur_batch_length)], 
+                                  sparse_values=tf.ones([(num_negative_samples*cur_batch_length)], 1))
+        
+        # drop positive
+        mask = tf.multiply(mask, (1- tf.eye(cur_batch_length)))
+        
     elif method == "hard":
-        top_k = tf.contrib.framework.sort(tf.expand_dims(tf.nn.top_k(-distances, k=num_negative_samples+1).indices, -1), axis=1)
-        row_indices = tf.expand_dims(tf.transpose(tf.reshape(tf.tile(tf.range(0, batch_size, 1), [num_negative_samples+1]), [num_negative_samples+1, batch_size])), -1)
-        mask_indices = tf.to_int64(tf.squeeze(tf.reshape(tf.concat([row_indices, top_k], 2), [(num_negative_samples+1)*batch_size,1,2])))
-        mask_sparse = tf.SparseTensor(mask_indices, [1]*((num_negative_samples+1)*batch_size), [batch_size,batch_size])
-        mask = tf.sparse_tensor_to_dense(mask_sparse)
-        drop_positive = tf.to_int32(tf.subtract(tf.ones([batch_size, batch_size]), tf.eye(batch_size)))
-        mask = tf.multiply(mask, drop_positive)
+        topk = tf.contrib.framework.sort(tf.nn.top_k(distances, k=num_negative_samples+1).indices, axis=1)
+        rows = tf.transpose(tf.reshape(tf.tile(tf.range(cur_batch_length), [num_negative_samples+1]), [num_negative_samples+1, cur_batch_length]))
+        indices = tf.to_int64(tf.reshape(tf.concat([tf.expand_dims(rows, -1), tf.expand_dims(topk, -1)], axis=2), [(num_negative_samples+1)*cur_batch_length, 2]))
+        mask = tf.sparse_to_dense(sparse_indices=indices, 
+                                  output_shape=[tf.to_int64(cur_batch_length), tf.to_int64(cur_batch_length)], 
+                                  sparse_values=tf.ones([((num_negative_samples+1)*cur_batch_length)], 1))
+        # drop positive
+        mask = tf.multiply(mask, (1- tf.eye(cur_batch_length)))
+        
     elif method == "weighted":
         weight = tf.map_fn(lambda x: get_distance_weight(x, batch_size), tf.to_float(distances))
         mask = weight
@@ -49,6 +56,7 @@ def make_negative_mask(distances, method="random", num_negative_samples=2, batch
 #         mask = tf.sparse_tensor_to_dense(mask_sparse)
 #         drop_positive = tf.to_int32(tf.subtract(tf.ones([batch_size, batch_size]), tf.eye(batch_size)))
 #         mask = tf.multiply(mask, drop_positive)
+        
     return mask
 
 def temporal_padding(x, padding=(1, 1)):
@@ -243,6 +251,8 @@ class DualEncoderTCN(BaseModel):
             self.queries_lengths = tf.placeholder(tf.int32, [None], name="queries_length")
             self.replies_lengths = tf.placeholder(tf.int32, [None], name="replies_length")
             self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
+            
+            self.num_negative_samples = tf.placeholder(tf.int32, name="num_negative_samples")
 
         cur_batch_length = tf.shape(self.input_queries)[0]
         
@@ -261,7 +271,7 @@ class DualEncoderTCN(BaseModel):
             replies_embedded = tf.nn.embedding_lookup(embeddings, self.input_replies, name="replies_embedded")
             queries_embedded, replies_embedded = tf.cast(queries_embedded, tf.float32), tf.cast(replies_embedded, tf.float32)
         
-        # Dropout
+        # Embedding Dropout
         queries_embedded = tf.nn.dropout(queries_embedded, keep_prob=self.config.dropout_keep_prob)
         replies_embedded = tf.nn.dropout(replies_embedded, keep_prob=self.config.dropout_keep_prob)
         
@@ -273,16 +283,17 @@ class DualEncoderTCN(BaseModel):
                                          dropout=1-self.config.dropout_keep_prob, 
                                          init=False, 
                                          name="query")
+        
         encoding_replies = TemporalConvNet(input_layer=replies_embedded, 
                                          num_channels=[256, 256, 256, 256, 256, 256], 
-                                         sequence_length = self.queries_lengths, 
+                                         sequence_length = self.replies_lengths, 
                                          kernel_size=self.config.tcn_kernel_size, 
                                          dropout=1-self.config.dropout_keep_prob, 
                                          init=False, 
                                          name="reply")
         
-        encoding_queries = tf.reduce_mean(encoding_queries, axis=1)
-        encoding_replies = tf.reduce_mean(encoding_replies, axis=1)
+        encoding_queries = tf.reduce_max(encoding_queries, axis=1)
+        encoding_replies = tf.reduce_max(encoding_replies, axis=1)
         
         # Predict a response
         with tf.variable_scope("prediction") as vs:
@@ -296,8 +307,7 @@ class DualEncoderTCN(BaseModel):
             positive_mask = tf.reshape(tf.eye(cur_batch_length), [-1])
             negative_mask = make_negative_mask(distances,
                                                method=self.config.negative_sampling,
-                                               num_negative_samples=self.config.num_negative_samples,
-                                               batch_size=self.config.batch_size)
+                                               num_negative_samples=self.num_negative_samples)
             
             # slice negative mask for when current batch size is smaller than predefined batch size
             negative_mask = tf.slice(negative_mask, [0,0], [cur_batch_length, cur_batch_length])

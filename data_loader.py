@@ -4,60 +4,43 @@ import os
 
 class DataGenerator:
     def __init__(self, preprocessor, config):
-        self.config = config
-        self.preprocessor = preprocessor
+        # get size of train and validataion set
         self.train_size = 298554955
         with open(config.val_dir, "r") as f:
             self.val_size = sum([1 for line in f])
-        self.shuffle = config.shuffle
             
-    def get_train_iterator(self, batch_size):
-        while True:
-            for fname in sorted(os.listdir(self.config.train_dir)):
-                file_dir = os.path.join(self.config.train_dir, fname)
+        # data config
+        self.train_dir = config.train_dir
+        self.val_dir = config.val_dir
+        self.max_length = config.max_length
+        self.batch_size = config.batch_size
+        self.shuffle = config.shuffle
+        self.num_epochs = config.num_epochs
+            
+    def get_train_iterator(self, index_table):
+        train_files = [os.path.join(self.train_dir, fname) 
+                       for fname in sorted(os.listdir(self.train_dir)) 
+                       if "validation" not in fname]
+        
+        train_set = tf.data.TextLineDataset(train_files)
+        train_set = train_set.map(lambda line: parse_single_line(line, index_table, self.max_length),
+                                  num_parallel_calls=8)
+        train_set = train_set.shuffle(buffer_size=10000)
+        train_set = train_set.batch(self.batch_size)
+        train_set = train_set.repeat(self.num_epochs)
+        
+        train_iterator = train_set.make_initializable_iterator()
+        return train_iterator
+        
+    def get_val_iterator(self, index_table):
+        val_set = tf.data.TextLineDataset(self.val_dir)
+        val_set = val_set.map(lambda line: parse_single_line(line, index_table, self.max_length),
+                              num_parallel_calls=2)
+        val_set = val_set.shuffle(buffer_size=1000)
+        val_set = val_set.batch(self.batch_size)
 
-                # get number of lines of a single file
-                with open(file_dir, "r") as f:
-                    file_length = sum([1 for line in f])
-
-                # get data and preprocess them
-                with open(file_dir, "r") as f:
-                    train_data = [line.strip() for line in f]
-                    if self.shuffle:
-                        np.random.shuffle(train_data)
-                        
-                    train_queries, train_replies = split_data(train_data)
-
-                    # preprocess
-                    train_queries, train_queries_lengths = zip(*[self.preprocessor.preprocess(query)
-                                                                 for query in train_queries])
-                    train_replies, train_replies_lengths = zip(*[self.preprocessor.preprocess(reply)
-                                                                 for reply in train_replies])
-
-                num_batches_per_file = (file_length-1)//batch_size + 1
-                for batch_num in range(num_batches_per_file):
-                    start = batch_num*batch_size
-                    end = min((batch_num+1)*batch_size, file_length)
-                    yield train_queries[start:end], train_replies[start:end], \
-                          train_queries_lengths[start:end], train_replies_lengths[start:end]
-
-    def get_val_iterator(self, batch_size):
-        with open(self.config.val_dir, "r") as f:
-            val_data = [line.strip() for line in f]
-            val_size = len(val_data)
-        val_queries, val_replies = split_data(val_data)
-
-        # preprocess
-        val_queries, val_queries_lengths = zip(*[self.preprocessor.preprocess(query)
-                                                     for query in val_queries])
-        val_replies, val_replies_lengths = zip(*[self.preprocessor.preprocess(reply)
-                                                     for reply in val_replies])
-        num_batches = (val_size-1)//batch_size + 1
-        for batch_num in range(num_batches):
-            start = batch_num*batch_size
-            end = min((batch_num+1)*batch_size, val_size)
-            yield val_queries[start:end], val_replies[start:end], \
-                  val_queries_lengths[start:end], val_replies_lengths[start:end]
+        val_iterator = val_set.make_initializable_iterator()
+        return val_iterator
             
     def load_test_data(self):
         base_dir = "/home/angrypark/reply_matching_model/data/"
@@ -77,22 +60,24 @@ class DataGenerator:
             test_replies.append(r)
             test_replies_lengths.append(l)
         return test_queries, test_replies, test_queries_lengths, test_replies_lengths, test_labels
-    
-    def _preprocess_single_line(self, line):
-        splits = line.split("\t")
-        query, reply = splits[1], splits[2]
-        indexed_query, query_length = self.preprocessor.preprocess(query)
-        indexed_reply, reply_length = self.preprocessor.preprocess(reply)
-        return indexed_query, indexed_reply, query_length, reply_length
-    
-    def get_dataset(self, batch_size):
-        filenames = os.listdir(self.config.train_dir)
-        dataset = tf.data.TextLineDataset(filenames)
-        dataset = dataset.map(lambda line:self._preprocess_single_line(line))
-        dataset = dataset.batch(batch_size)
-        dataset = dataset.make_one_shot_iterator()
-        return dataset
 
 def split_data(data):
     _, queries, replies = zip(*[line.split('\t') for line in data])
     return queries, replies
+
+def parse_single_line(line, index_table, max_length):
+    """get single line from train set, and returns after padding and indexing
+    :param line: corpus id \t query \t reply
+    """
+    splited = tf.string_split([line], delimiter="\t")
+    query = tf.concat([["<SOS>"], tf.string_split([splited.values[1]], delimiter=" ").values, ["<EOS>"]], axis=0)
+    reply = tf.concat([["<SOS>"], tf.string_split([splited.values[2]], delimiter=" ").values, ["<EOS>"]], axis=0)
+    
+    paddings = tf.constant([[0, 0],[0, max_length]])
+    padded_query = tf.slice(tf.pad([query], paddings, constant_values="<PAD>"), [0, 0], [-1, max_length])
+    padded_reply = tf.slice(tf.pad([reply], paddings, constant_values="<PAD>"), [0, 0], [-1, max_length])
+    
+    indexed_query = tf.squeeze(index_table.lookup(padded_query))
+    indexed_reply = tf.squeeze(index_table.lookup(padded_reply))
+    
+    return indexed_query, indexed_reply, tf.shape(query)[0], tf.shape(reply)[0]

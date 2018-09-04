@@ -10,6 +10,7 @@ class Vectorizer:
     SOS_TOKEN = "<SOS>"
     EOS_TOKEN = "<EOS>"
     UNK_TOKEN = "<UNK>"
+    PAD_TOKEN = "<PAD>"
     def __init__(self, tokenizer, config):
         self.tokenizer = tokenizer
         self.pretrained_embed_dir = config.pretrained_embed_dir

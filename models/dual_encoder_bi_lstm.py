@@ -65,9 +65,9 @@ def make_negative_mask(distances, num_negative_samples, method="random"):
     return mask
 
 
-class DualEncoderLSTM(BaseModel):
+class DualEncoderBiLSTM(BaseModel):
     def __init__(self, data, config, mode="train"):
-        super(DualEncoderLSTM, self).__init__(data, config)
+        super(DualEncoderBiLSTM, self).__init__(data, config)
         self.mode = mode
         self.build_model()
         self.init_saver()
@@ -118,47 +118,61 @@ class DualEncoderLSTM(BaseModel):
 
         # Build LSTM layer
         with tf.variable_scope("lstm") as vs:
-            send_lstm_cell = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
+            send_lstm_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
                                                      forget_bias=2.0,
                                                      use_peepholes=True,
                                                      state_is_tuple=True,
-                                                     # initializer=tf.orthogonal_initializer(),
-                                                     name='send')
-            send_lstm_cell = tf.contrib.rnn.DropoutWrapper(send_lstm_cell,
+                                                     name='send_fw')
+            send_lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(send_lstm_cell_fw,
                                                            input_keep_prob=self.dropout_keep_prob)
-            recv_lstm_cell = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
+            send_lstm_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
                                                      forget_bias=2.0,
                                                      use_peepholes=True,
                                                      state_is_tuple=True,
-                                                     # initializer=tf.orthogonal_initializer(),
-                                                     name='recv')
-            recv_lstm_cell = tf.contrib.rnn.DropoutWrapper(recv_lstm_cell,
+                                                     name='send_bw')
+            send_lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(send_lstm_cell_bw,
                                                            input_keep_prob=self.dropout_keep_prob)
-            _, encoding_queries = tf.nn.dynamic_rnn(
-                cell=send_lstm_cell,
+            recv_lstm_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
+                                                     forget_bias=2.0,
+                                                     use_peepholes=True,
+                                                     state_is_tuple=True,
+                                                     name='recv_fw')
+            recv_lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(recv_lstm_cell_fw,
+                                                           input_keep_prob=self.dropout_keep_prob)
+            recv_lstm_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
+                                                     forget_bias=2.0,
+                                                     use_peepholes=True,
+                                                     state_is_tuple=True,
+                                                     name='recv_bw')
+            recv_lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(recv_lstm_cell_bw,
+                                                           input_keep_prob=self.dropout_keep_prob)
+            _, encoding_queries = tf.nn.bidirectional_dynamic_rnn(
+                cell_fw=send_lstm_cell_fw,
+                cell_bw=send_lstm_cell_bw,
                 inputs=queries_embedded,
                 sequence_length=self.queries_lengths,
                 dtype=tf.float32,
             )
-            _, encoding_replies = tf.nn.dynamic_rnn(
-                cell=recv_lstm_cell,
+            _, encoding_replies = tf.nn.bidirectional_dynamic_rnn(
+                cell_fw=recv_lstm_cell_fw,
+                cell_bw=recv_lstm_cell_bw,
                 inputs=replies_embedded,
                 sequence_length=self.replies_lengths,
                 dtype=tf.float32,
             )
         
-        encoding_queries = encoding_queries.h
-        encoding_replies = encoding_replies.h
+        encoding_queries = tf.concat([encoding_queries[0].h, encoding_queries[1].h], axis=1)
+        encoding_replies = tf.concat([encoding_replies[0].h, encoding_replies[1].h], axis=1)
 
         # Predict a response
         with tf.variable_scope("prediction") as vs:
             M = tf.get_variable("M",
-                                shape=[self.config.lstm_dim, self.config.lstm_dim],
+                                shape=[self.config.lstm_dim*2, self.config.lstm_dim*2],
                                 initializer=tf.truncated_normal_initializer())
             encoding_queries = tf.matmul(encoding_queries, M)
 
         with tf.variable_scope("negative_sampling") as vs:
-            distances = tf.matmul(encoding_queries, tf.transpose(encoding_replies))
+            distances = tf.matmul(encoding_queries, encoding_replies, transpose_b=True)
             positive_mask = tf.reshape(tf.eye(cur_batch_length), [-1])
             negative_mask = make_negative_mask(distances,
                                                method=self.config.negative_sampling,
