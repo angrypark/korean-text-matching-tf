@@ -61,7 +61,6 @@ def make_negative_mask(distances, num_negative_samples, method="random"):
 #         mask = tf.sparse_tensor_to_dense(mask_sparse)
 #         drop_positive = tf.to_int32(tf.subtract(tf.ones([batch_size, batch_size]), tf.eye(batch_size)))
 #         mask = tf.multiply(mask, drop_positive)
-
     return mask
 
 
@@ -102,6 +101,8 @@ class DualEncoderBiLSTM(BaseModel):
                                                    decay_rate=0.96,
                                                    staircase=True)
         self.optimizer = tf.train.AdamOptimizer(learning_rate)
+        
+        # self.optimizer = tf.contrib.estimator.clip_gradients_by_norm(self.optimizer, clip_norm=5.0)
 
         # Embedding layer
         with tf.variable_scope("embedding"):
@@ -112,50 +113,46 @@ class DualEncoderBiLSTM(BaseModel):
                                      trainable=True, 
                                      name="embeddings")
             queries_embedded = tf.nn.embedding_lookup(embeddings, self.input_queries, name="queries_embedded")
-            self.embedding_lookup = queries_embedded # DEBUG
             replies_embedded = tf.nn.embedding_lookup(embeddings, self.input_replies, name="replies_embedded")
             queries_embedded, replies_embedded = tf.cast(queries_embedded, tf.float32), tf.cast(replies_embedded, tf.float32)
+            
+            # Dropout for embedding layer
+            queries_embedded = tf.nn.dropout(queries_embedded, keep_prob=self.config.embed_dropout_keep_prob)
+            replies_embedded = tf.nn.dropout(replies_embedded, keep_prob=self.config.embed_dropout_keep_prob)
 
         # Build LSTM layer
         with tf.variable_scope("lstm") as vs:
-            send_lstm_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
-                                                     forget_bias=2.0,
-                                                     use_peepholes=True,
-                                                     state_is_tuple=True,
-                                                     name='send_fw')
-            send_lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(send_lstm_cell_fw,
-                                                           input_keep_prob=self.dropout_keep_prob)
-            send_lstm_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
-                                                     forget_bias=2.0,
-                                                     use_peepholes=True,
-                                                     state_is_tuple=True,
-                                                     name='send_bw')
-            send_lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(send_lstm_cell_bw,
-                                                           input_keep_prob=self.dropout_keep_prob)
-            recv_lstm_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
-                                                     forget_bias=2.0,
-                                                     use_peepholes=True,
-                                                     state_is_tuple=True,
-                                                     name='recv_fw')
-            recv_lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(recv_lstm_cell_fw,
-                                                           input_keep_prob=self.dropout_keep_prob)
-            recv_lstm_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim,
-                                                     forget_bias=2.0,
-                                                     use_peepholes=True,
-                                                     state_is_tuple=True,
-                                                     name='recv_bw')
-            recv_lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(recv_lstm_cell_bw,
-                                                           input_keep_prob=self.dropout_keep_prob)
+            query_lstm_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim, name='query_fw')
+            query_lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(query_lstm_cell_fw, 
+                                                               input_keep_prob=self.dropout_keep_prob, 
+                                                               output_keep_prob=self.dropout_keep_prob, 
+                                                               state_keep_prob=self.dropout_keep_prob)
+            query_lstm_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim, name='query_bw')
+            query_lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(query_lstm_cell_bw, 
+                                                               input_keep_prob=self.dropout_keep_prob, 
+                                                               output_keep_prob=self.dropout_keep_prob, 
+                                                               state_keep_prob=self.dropout_keep_prob)
+            reply_lstm_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim, name='reply_fw')
+            reply_lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(reply_lstm_cell_fw, 
+                                                               input_keep_prob=self.dropout_keep_prob, 
+                                                               output_keep_prob=self.dropout_keep_prob, 
+                                                               state_keep_prob=self.dropout_keep_prob)
+            reply_lstm_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.lstm_dim, name='reply_bw')
+            reply_lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(reply_lstm_cell_bw, 
+                                                               input_keep_prob=self.dropout_keep_prob, 
+                                                               output_keep_prob=self.dropout_keep_prob, 
+                                                               state_keep_prob=self.dropout_keep_prob)
+
             _, encoding_queries = tf.nn.bidirectional_dynamic_rnn(
-                cell_fw=send_lstm_cell_fw,
-                cell_bw=send_lstm_cell_bw,
+                cell_fw=query_lstm_cell_fw,
+                cell_bw=query_lstm_cell_bw,
                 inputs=queries_embedded,
                 sequence_length=self.queries_lengths,
                 dtype=tf.float32,
             )
             _, encoding_replies = tf.nn.bidirectional_dynamic_rnn(
-                cell_fw=recv_lstm_cell_fw,
-                cell_bw=recv_lstm_cell_bw,
+                cell_fw=reply_lstm_cell_fw,
+                cell_bw=reply_lstm_cell_bw,
                 inputs=replies_embedded,
                 sequence_length=self.replies_lengths,
                 dtype=tf.float32,
@@ -168,7 +165,7 @@ class DualEncoderBiLSTM(BaseModel):
         with tf.variable_scope("prediction") as vs:
             M = tf.get_variable("M",
                                 shape=[self.config.lstm_dim*2, self.config.lstm_dim*2],
-                                initializer=tf.truncated_normal_initializer())
+                                initializer=tf.contrib.layers.xavier_initializer())
             encoding_queries = tf.matmul(encoding_queries, M)
 
         with tf.variable_scope("negative_sampling") as vs:
@@ -177,9 +174,6 @@ class DualEncoderBiLSTM(BaseModel):
             negative_mask = make_negative_mask(distances,
                                                method=self.config.negative_sampling,
                                                num_negative_samples=self.num_negative_samples)
-            
-            # slice negative mask for when current batch size is smaller than predefined batch size
-            negative_mask = tf.slice(negative_mask, [0,0], [cur_batch_length, cur_batch_length])
             negative_mask = tf.reshape(negative_mask, [-1])
 
         with tf.variable_scope("logits"):
@@ -194,9 +188,11 @@ class DualEncoderBiLSTM(BaseModel):
         with tf.variable_scope("loss"):
             self.labels = tf.to_float(tf.concat([tf.ones([num_positives, 1]), tf.zeros([num_negatives, 1])], 0))
             losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=self.labels)
-            self.losses = losses # DEBUG
             self.loss = tf.reduce_mean(losses)
-            self.train_step = self.optimizer.minimize(self.loss, global_step=self.global_step_tensor)
+            gvs = self.optimizer.compute_gradients(self.loss)
+            capped_gvs = [(tf.clip_by_norm(grad, 5), var) for grad, var in gvs]
+            self.train_step = self.optimizer.apply_gradients(capped_gvs)
+            # self.optimizer.minimize(self.loss)
 
         # Calculate accuracy
         with tf.name_scope("score"):

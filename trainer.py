@@ -89,14 +89,24 @@ class MatchingModelTrainer_old(BaseTrainer):
         batch_queries_lengths, batch_replies_lengths = next(self.train_iterator)
         
         cur_batch_length = len(batch_queries)
-
-        feed_dict = {model.input_queries: batch_queries,
-                     model.input_replies: batch_replies,
-                     model.queries_lengths: batch_queries_lengths,
-                     model.replies_lengths: batch_replies_lengths,
-                     model.dropout_keep_prob: self.config.dropout_keep_prob,
-                     model.num_negative_samples: self.config.num_negative_samples
-                    }
+        if self.global_step < 10000:
+            feed_dict = {model.input_queries: batch_queries,
+                         model.input_replies: batch_replies,
+                         model.queries_lengths: batch_queries_lengths,
+                         model.replies_lengths: batch_replies_lengths,
+                         model.dropout_keep_prob: self.config.dropout_keep_prob,
+                         model.num_negative_samples: self.config.num_negative_samples, 
+                         model.add_echo: False
+                        }
+        else:
+            feed_dict = {model.input_queries: batch_queries,
+                         model.input_replies: batch_replies,
+                         model.queries_lengths: batch_queries_lengths,
+                         model.replies_lengths: batch_replies_lengths,
+                         model.dropout_keep_prob: self.config.dropout_keep_prob,
+                         model.num_negative_samples: self.config.num_negative_samples,
+                         model.add_echo: True
+                        }
         _, loss, score = sess.run([model.train_step, model.loss, model.score],
                                      feed_dict=feed_dict)
         
@@ -134,11 +144,6 @@ class MatchingModelTrainer_old(BaseTrainer):
             scores = list()
             
             for step in tqdm(range(1, self.num_steps_per_epoch+1)):
-                # skip trained batches
-                # if ((epoch - 1) * self.num_steps_per_epoch) + step < self.global_step:
-                #     _, _, _, _ = next(self.train_iterator)
-                #     continue
-
                 loss, score, cur_batch_length = self.train_step(train_model, train_sess)
                 
                 # increment global step

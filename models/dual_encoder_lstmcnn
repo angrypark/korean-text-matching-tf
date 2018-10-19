@@ -6,14 +6,15 @@ from gensim.models import FastText
 from utils.utils import JamoProcessor
 from models.base import BaseModel
 
-def get_embeddings(vocab_list_dir, 
-                   pretrained_embed_dir, 
-                   vocab_size, 
+
+def get_embeddings(vocab_list_dir,
+                   pretrained_embed_dir,
+                   vocab_size,
                    embed_dim):
-    embedding = np.random.uniform(-1/16, 1/16, [vocab_size, embed_dim])
+    embedding = np.random.uniform(-1 / 16, 1 / 16, [vocab_size, embed_dim])
     if os.path.isfile(pretrained_embed_dir) & os.path.isfile(vocab_list_dir):
         with open(vocab_list_dir, "r") as f:
-            vocab_list = [word.strip() for word in f if len(word)>0]
+            vocab_list = [word.strip() for word in f if len(word) > 0]
         processor = JamoProcessor()
         ft = FastText.load(pretrained_embed_dir)
         num_oov = 0
@@ -27,47 +28,54 @@ def get_embeddings(vocab_list_dir,
         print("No pre-trained embedding found, initialize with random distribution")
     return embedding
 
+
 def make_negative_mask(distances, num_negative_samples, method="random"):
     cur_batch_length = tf.shape(distances)[0]
     if method == "random":
-        topk = tf.contrib.framework.sort(tf.nn.top_k(tf.random_uniform([cur_batch_length, cur_batch_length]), k=num_negative_samples).indices, axis=1)
-        rows = tf.transpose(tf.reshape(tf.tile(tf.range(cur_batch_length), [num_negative_samples]), [num_negative_samples, cur_batch_length]))
-        indices = tf.to_int64(tf.reshape(tf.concat([tf.expand_dims(rows, -1), tf.expand_dims(topk, -1)], axis=2), [num_negative_samples*cur_batch_length, 2]))
-        mask = tf.sparse_to_dense(sparse_indices=indices, 
-                                  output_shape=[tf.to_int64(cur_batch_length), tf.to_int64(cur_batch_length)], 
-                                  sparse_values=tf.ones([(num_negative_samples*cur_batch_length)], 1))
-        
+        topk = tf.contrib.framework.sort(
+            tf.nn.top_k(tf.random_uniform([cur_batch_length, cur_batch_length]), k=num_negative_samples).indices,
+            axis=1)
+        rows = tf.transpose(tf.reshape(tf.tile(tf.range(cur_batch_length), [num_negative_samples]),
+                                       [num_negative_samples, cur_batch_length]))
+        indices = tf.to_int64(tf.reshape(tf.concat([tf.expand_dims(rows, -1), tf.expand_dims(topk, -1)], axis=2),
+                                         [num_negative_samples * cur_batch_length, 2]))
+        mask = tf.sparse_to_dense(sparse_indices=indices,
+                                  output_shape=[tf.to_int64(cur_batch_length), tf.to_int64(cur_batch_length)],
+                                  sparse_values=tf.ones([(num_negative_samples * cur_batch_length)], 1))
+
         # drop positive
-        mask = tf.multiply(mask, (1- tf.eye(cur_batch_length)))
-        
+        mask = tf.multiply(mask, (1 - tf.eye(cur_batch_length)))
+
     elif method == "hard":
-        topk = tf.contrib.framework.sort(tf.nn.top_k(distances, k=num_negative_samples+1).indices, axis=1)
-        rows = tf.transpose(tf.reshape(tf.tile(tf.range(cur_batch_length), [num_negative_samples+1]), [num_negative_samples+1, cur_batch_length]))
-        indices = tf.to_int64(tf.reshape(tf.concat([tf.expand_dims(rows, -1), tf.expand_dims(topk, -1)], axis=2), [(num_negative_samples+1)*cur_batch_length, 2]))
-        mask = tf.sparse_to_dense(sparse_indices=indices, 
-                                  output_shape=[tf.to_int64(cur_batch_length), tf.to_int64(cur_batch_length)], 
-                                  sparse_values=tf.ones([((num_negative_samples+1)*cur_batch_length)], 1))
+        topk = tf.contrib.framework.sort(tf.nn.top_k(distances, k=num_negative_samples + 1).indices, axis=1)
+        rows = tf.transpose(tf.reshape(tf.tile(tf.range(cur_batch_length), [num_negative_samples + 1]),
+                                       [num_negative_samples + 1, cur_batch_length]))
+        indices = tf.to_int64(tf.reshape(tf.concat([tf.expand_dims(rows, -1), tf.expand_dims(topk, -1)], axis=2),
+                                         [(num_negative_samples + 1) * cur_batch_length, 2]))
+        mask = tf.sparse_to_dense(sparse_indices=indices,
+                                  output_shape=[tf.to_int64(cur_batch_length), tf.to_int64(cur_batch_length)],
+                                  sparse_values=tf.ones([((num_negative_samples + 1) * cur_batch_length)], 1))
         # drop positive
-        mask = tf.multiply(mask, (1- tf.eye(cur_batch_length)))
-        
+        mask = tf.multiply(mask, (1 - tf.eye(cur_batch_length)))
+
     elif method == "weighted":
         weight = tf.map_fn(lambda x: get_distance_weight(x, batch_size), tf.to_float(distances))
         mask = weight
-#         mask = tf.to_int32(tf.contrib.framework.sort(tf.expand_dims(tf.multinomial(weight, num_negative_samples+1), -1), axis=1))
-#         weighted_samples_indices = tf.to_int32(tf.contrib.framework.sort(tf.expand_dims(tf.multinomial(weight, num_negative_samples+1), -1), axis=1))
-#         row_indices = tf.expand_dims(tf.transpose(tf.reshape(tf.tile(tf.range(0, batch_size, 1), [num_negative_samples+1]), [num_negative_samples+1, batch_size])), -1)
-#         mask_indices = tf.to_int64(tf.squeeze(tf.reshape(tf.concat([row_indices, weighted_samples_indices], 2), [(num_negative_samples+1)*batch_size,1,2])))
-#         mask_sparse = tf.SparseTensor(mask_indices, [1]*((num_negative_samples+1)*batch_size), [batch_size,batch_size])
-#         mask = tf.sparse_tensor_to_dense(mask_sparse)
-#         drop_positive = tf.to_int32(tf.subtract(tf.ones([batch_size, batch_size]), tf.eye(batch_size)))
-#         mask = tf.multiply(mask, drop_positive)
+    #         mask = tf.to_int32(tf.contrib.framework.sort(tf.expand_dims(tf.multinomial(weight, num_negative_samples+1), -1), axis=1))
+    #         weighted_samples_indices = tf.to_int32(tf.contrib.framework.sort(tf.expand_dims(tf.multinomial(weight, num_negative_samples+1), -1), axis=1))
+    #         row_indices = tf.expand_dims(tf.transpose(tf.reshape(tf.tile(tf.range(0, batch_size, 1), [num_negative_samples+1]), [num_negative_samples+1, batch_size])), -1)
+    #         mask_indices = tf.to_int64(tf.squeeze(tf.reshape(tf.concat([row_indices, weighted_samples_indices], 2), [(num_negative_samples+1)*batch_size,1,2])))
+    #         mask_sparse = tf.SparseTensor(mask_indices, [1]*((num_negative_samples+1)*batch_size), [batch_size,batch_size])
+    #         mask = tf.sparse_tensor_to_dense(mask_sparse)
+    #         drop_positive = tf.to_int32(tf.subtract(tf.ones([batch_size, batch_size]), tf.eye(batch_size)))
+    #         mask = tf.multiply(mask, drop_positive)
 
     return mask
 
 
-class DualEncoderLSTM(BaseModel):
+class DualEncoderLSTMCNN(BaseModel):
     def __init__(self, data, config, mode="train"):
-        super(DualEncoderLSTM, self).__init__(data, config)
+        super(DualEncoderLSTMCNN, self).__init__(data, config)
         self.mode = mode
         self.build_model()
         self.init_saver()
@@ -78,45 +86,47 @@ class DualEncoderLSTM(BaseModel):
             vocabulary_file=self.config.vocab_list,
             num_oov_buckets=0,
             default_value=0)
-        
-        self.data_iterator = self.data.get_train_iterator(index_table) if self.mode=="train" else self.data.get_val_iterator(index_table)
-        
+
+        self.data_iterator = self.data.get_train_iterator(
+            index_table) if self.mode == "train" else self.data.get_val_iterator(index_table)
+
         with tf.variable_scope("inputs"):
             # Placeholders for input, output
             input_queries, input_replies, queries_lengths, replies_lengths = self.data_iterator.get_next()
-            self.input_queries = tf.placeholder_with_default(input_queries, [None, self.config.max_length], name="input_queries")
-            self.input_replies = tf.placeholder_with_default(input_replies, [None, self.config.max_length], name="input_replies")
+            self.input_queries = tf.placeholder_with_default(input_queries, [None, self.config.max_length],
+                                                             name="input_queries")
+            self.input_replies = tf.placeholder_with_default(input_replies, [None, self.config.max_length],
+                                                             name="input_replies")
 
             self.queries_lengths = tf.placeholder_with_default(queries_lengths, [None], name="queries_length")
             self.replies_lengths = tf.placeholder_with_default(replies_lengths, [None], name="replies_length")
-            
+
             self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
             self.num_negative_samples = tf.placeholder(tf.int32, name="num_negative_samples")
             self.add_echo = tf.placeholder(tf.int32, name="add_echo")
 
-
         cur_batch_length = tf.shape(self.input_queries)[0]
 
         # Define learning rate and optimizer
-        learning_rate = tf.train.exponential_decay(self.config.learning_rate, 
+        learning_rate = tf.train.exponential_decay(self.config.learning_rate,
                                                    self.global_step_tensor,
-                                                   decay_steps=50000, 
+                                                   decay_steps=50000,
                                                    decay_rate=0.96,
                                                    staircase=True)
         self.optimizer = tf.train.AdamOptimizer(learning_rate)
 
         # Embedding layer
         with tf.variable_scope("embedding"):
-            embeddings = tf.Variable(get_embeddings(self.config.vocab_list, 
-                                                    self.config.pretrained_embed_dir, 
-                                                    self.config.vocab_size, 
+            embeddings = tf.Variable(get_embeddings(self.config.vocab_list,
+                                                    self.config.pretrained_embed_dir,
+                                                    self.config.vocab_size,
                                                     self.config.embed_dim),
-                                     trainable=True, 
+                                     trainable=True,
                                      name="embeddings")
             queries_embedded = tf.nn.embedding_lookup(embeddings, self.input_queries, name="queries_embedded")
-            self.embedding_lookup = queries_embedded # DEBUG
             replies_embedded = tf.nn.embedding_lookup(embeddings, self.input_replies, name="replies_embedded")
-            queries_embedded, replies_embedded = tf.cast(queries_embedded, tf.float32), tf.cast(replies_embedded, tf.float32)
+            queries_embedded, replies_embedded = tf.cast(queries_embedded, tf.float32), tf.cast(replies_embedded,
+                                                                                                tf.float32)
 
         # Build LSTM layer
         with tf.variable_scope("lstm") as vs:
@@ -148,18 +158,18 @@ class DualEncoderLSTM(BaseModel):
                 sequence_length=self.replies_lengths,
                 dtype=tf.float32,
             )
-            
-            if False:
+
+            if self.add_echo:
                 _, encoding_echo_replies = tf.nn.dynamic_rnn(
-                    cell=recv_lstm_cell, 
-                    inputs=queries_embedded, 
-                    sequence_length=queries_lengths, 
+                    cell=recv_lstm_cell,
+                    inputs=queries_embedded,
+                    sequence_length=queries_lengths,
                     dtype=tf.float32)
                 encoding_echo_replies = encoding_echo_replies.h
-        
+
         encoding_queries = encoding_queries.h
         encoding_replies = encoding_replies.h
-        
+
         self.encoding_queries = encoding_queries
         self.encoding_replies = encoding_replies
 
@@ -176,12 +186,12 @@ class DualEncoderLSTM(BaseModel):
             negative_mask = make_negative_mask(distances,
                                                method=self.config.negative_sampling,
                                                num_negative_samples=self.num_negative_samples)
-            
+
             # slice negative mask for when current batch size is smaller than predefined batch size
-            negative_mask = tf.slice(negative_mask, [0,0], [cur_batch_length, cur_batch_length])
+            negative_mask = tf.slice(negative_mask, [0, 0], [cur_batch_length, cur_batch_length])
             negative_mask = tf.reshape(negative_mask, [-1])
-            
-            if False:
+
+            if self.add_echo:
                 echo_distances = tf.matmul(encoding_queries, encoding_echo_replies, transpose_b=True)
 
         with tf.variable_scope("logits"):
@@ -190,8 +200,8 @@ class DualEncoderLSTM(BaseModel):
             negative_logits = tf.gather(tf.reshape(distances, [-1]), tf.where(negative_mask), 1)
             num_positives = tf.shape(positive_logits)[0]
             num_negatives = tf.shape(negative_logits)[0]
-            
-            if False:
+
+            if self.add_echo:
                 echo_logits = tf.gather(tf.reshape(echo_distances, [-1]), tf.where(positive_mask), 1)
                 self.logits = tf.concat([positive_logits, negative_logits, echo_logits], 0)
             else:
@@ -199,8 +209,9 @@ class DualEncoderLSTM(BaseModel):
 
         # Calculate mean cross-entropy loss
         with tf.variable_scope("loss"):
-            if False:
-                self.labels = self.labels = tf.to_float(tf.concat([tf.ones([num_positives, 1]), tf.zeros([num_negatives + num_positives, 1])], 0))
+            if self.add_echo:
+                self.labels = self.labels = tf.to_float(
+                    tf.concat([tf.ones([num_positives, 1]), tf.zeros([num_negatives + num_positives, 1])], 0))
             else:
                 self.labels = tf.to_float(tf.concat([tf.ones([num_positives, 1]), tf.zeros([num_negatives, 1])], 0))
             losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=self.labels)

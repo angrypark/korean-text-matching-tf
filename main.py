@@ -41,10 +41,10 @@ args.add_argument("--vocab_list", type=str, default="/media/scatter/scatterdisk/
 
 # Model hyperparameters
 args.add_argument("--embed_dim", type=int, default=256)
+args.add_argument("--embed_dropout_keep_prob", type=float, default=0.9)
 args.add_argument("--learning_rate", type=float, default=1e-3)
 args.add_argument("--min_length", type=int, default=1)
 args.add_argument("--max_length", type=int, default=20)
-
 args.add_argument("--dropout_keep_prob", type=float, default=0.9)
 
 # Model : DualEncoderLSTM
@@ -65,6 +65,7 @@ args.add_argument("--shuffle", type=bool, default=True)
 # Sampling parameters
 args.add_argument("--negative_sampling", type=str, default="random", choices=["random", "hard", "weighted"])
 args.add_argument("--num_negative_samples", type=int, default=4)
+args.add_argument("--add_echo", type=bool, default=False)
 
 def main():
     config = args.parse_args()

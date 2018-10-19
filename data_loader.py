@@ -23,9 +23,8 @@ class DataGenerator:
                        if "validation" not in fname]
         
         train_set = tf.data.TextLineDataset(train_files)
-        train_set = train_set.map(lambda line: parse_single_line(line, index_table, self.max_length),
-                                  num_parallel_calls=8)
-        train_set = train_set.shuffle(buffer_size=10000)
+        train_set = train_set.map(lambda line: parse_single_line(line, index_table, self.max_length), num_parallel_calls=5000)
+        train_set = train_set.shuffle(buffer_size=5000)
         train_set = train_set.batch(self.batch_size)
         train_set = train_set.repeat(self.num_epochs)
         
@@ -34,9 +33,8 @@ class DataGenerator:
         
     def get_val_iterator(self, index_table):
         val_set = tf.data.TextLineDataset(self.val_dir)
-        val_set = val_set.map(lambda line: parse_single_line(line, index_table, self.max_length),
-                              num_parallel_calls=2)
-        val_set = val_set.shuffle(buffer_size=1000)
+        val_set = val_set.map(lambda line: parse_single_line(line, index_table, self.max_length), num_parallel_calls=1000)
+        val_set = val_set.shuffle(buffer_size=5000)
         val_set = val_set.batch(self.batch_size)
 
         val_iterator = val_set.make_initializable_iterator()
@@ -72,7 +70,7 @@ def parse_single_line(line, index_table, max_length):
     splited = tf.string_split([line], delimiter="\t")
     query = tf.concat([["<SOS>"], tf.string_split([splited.values[1]], delimiter=" ").values, ["<EOS>"]], axis=0)
     reply = tf.concat([["<SOS>"], tf.string_split([splited.values[2]], delimiter=" ").values, ["<EOS>"]], axis=0)
-    
+
     paddings = tf.constant([[0, 0],[0, max_length]])
     padded_query = tf.slice(tf.pad([query], paddings, constant_values="<PAD>"), [0, 0], [-1, max_length])
     padded_reply = tf.slice(tf.pad([reply], paddings, constant_values="<PAD>"), [0, 0], [-1, max_length])
